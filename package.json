@@ -1,0 +1,27 @@
+{
+  "name": "aura-ai",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.15.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:libs": "corepack pnpm --filter @aura/shared-types build && corepack pnpm --filter @aura/api-client --filter @aura/platform build",
+    "dev": "corepack pnpm build:libs && corepack pnpm --parallel --filter @aura/web --filter @aura/server dev",
+    "lint": "eslint .",
+    "typecheck": "corepack pnpm build:libs && corepack pnpm --filter @aura/server --filter @aura/web typecheck",
+    "test": "corepack pnpm build:libs && vitest run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:migrate": "corepack pnpm --filter @aura/server db:migrate"
+  },
+  "devDependencies": {
+    "@aura/config": "workspace:*",
+    "eslint": "^9.35.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

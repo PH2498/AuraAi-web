@@ -1,0 +1,69 @@
+/* Ported from tasks.html. */
+body[data-page="tasks"] { overflow: hidden; }
+body[data-page="tasks"] .page-veil { --veil: 70%; }
+body[data-page="tasks"] .taskpage { display: grid; grid-template-columns: 340px minmax(0, 1fr); }
+body[data-page="tasks"] .rail { min-width: 0; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); border-right: 1px solid var(--border); }
+body[data-page="tasks"] .rail-head { display: flex; align-items: flex-end; justify-content: space-between; padding: 22px 20px 12px; }
+body[data-page="tasks"] .rail-head h1 { font-size: 26px; font-weight: 540; letter-spacing: -0.03em; }
+body[data-page="tasks"] .rail-head .n { font: 500 12px var(--font-mono); color: var(--muted); }
+body[data-page="tasks"] .filters { display: flex; gap: 6px; padding: 0 16px 10px; overflow-x: auto; scrollbar-width: none; }
+body[data-page="tasks"] .filters button { height: 30px; padding: 0 11px; border-radius: var(--r-pill); color: var(--muted); font-size: 12.5px; white-space: nowrap; border: 1px solid transparent; transition: background var(--dur-micro) var(--ease), color var(--dur-micro) var(--ease), border-color var(--dur-micro) var(--ease); }
+body[data-page="tasks"] .filters button:hover { color: var(--fg); background: var(--hover); }
+body[data-page="tasks"] .filters button[aria-pressed="true"] { color: var(--fg); background: var(--press); border-color: var(--border-strong); }
+body[data-page="tasks"] .filters .c { margin-left: 6px; font: 500 11px var(--font-mono); color: var(--muted); }
+body[data-page="tasks"] .search { position: relative; margin: 0 16px 8px; }
+body[data-page="tasks"] .search > .i { position: absolute; left: 11px; top: 10px; color: var(--muted); pointer-events: none; }
+body[data-page="tasks"] .search .input { height: 36px; padding-left: 34px; }
+body[data-page="tasks"] .tlist { padding: 4px 10px 24px; }
+body[data-page="tasks"] .trow { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px 10px; width: 100%; padding: 12px 10px; border-radius: 12px; text-align: left; transition: background var(--dur-micro) var(--ease); }
+body[data-page="tasks"] .trow:hover { background: var(--hover); }
+body[data-page="tasks"] .trow[aria-current="true"] { background: var(--press); }
+body[data-page="tasks"] .trow .ic { grid-row: 1 / span 2; margin-top: 2px; color: var(--muted); }
+body[data-page="tasks"] .trow[data-s="run"] .ic { color: var(--fg); animation: spin 1s linear infinite; }
+body[data-page="tasks"] .trow[data-s="wait"] .ic { color: var(--warning); }
+body[data-page="tasks"] .trow[data-s="fail"] .ic { color: var(--danger); }
+body[data-page="tasks"] .trow[data-s="done"] .ic { color: var(--success); }
+body[data-page="tasks"] .trow .t { font-size: 14px; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body[data-page="tasks"] .trow .m { grid-column: 2; font-size: 12px; color: var(--muted); display: flex; gap: 8px; }
+body[data-page="tasks"] .tlist .empty-state { padding: 36px 16px; }
+body[data-page="tasks"] .detail { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+body[data-page="tasks"] .dhead { display: flex; align-items: center; gap: 16px; padding: 18px 36px 8px; }
+body[data-page="tasks"] .dhead .core-slot { --slot: 72px; }
+body[data-page="tasks"] .dhead .ttl { flex: 1; min-width: 0; }
+body[data-page="tasks"] .dhead h2 { font-size: 22px; font-weight: 540; letter-spacing: -0.02em; }
+body[data-page="tasks"] .dhead .sub { margin-top: 4px; color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+body[data-page="tasks"] .dbody { min-height: 0; padding: 8px 36px 32px; }
+body[data-page="tasks"] .goal { max-width: 680px; font-size: 15px; line-height: 1.65; color: var(--muted); }
+body[data-page="tasks"] .goal b { color: var(--fg); font-weight: 540; }
+body[data-page="tasks"] .flow { position: relative; max-width: 680px; margin-top: 28px; display: grid; gap: 0; }
+body[data-page="tasks"] .step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 14px; padding: 0 0 22px; }
+body[data-page="tasks"] .step:last-child { padding-bottom: 0; }
+body[data-page="tasks"] .node { position: relative; z-index: 1; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border-strong); }
+body[data-page="tasks"] .step[data-s="done"] .node { color: var(--success); }
+body[data-page="tasks"] .step[data-s="run"] .node { color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+body[data-page="tasks"] .step[data-s="run"] .node .i { animation: spin 1s linear infinite; }
+body[data-page="tasks"] .step[data-s="wait"] .node { color: var(--warning); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--warning) 55%, transparent); }
+body[data-page="tasks"] .step[data-s="fail"] .node { color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--danger) 55%, transparent); }
+body[data-page="tasks"] .step:not(:last-child) .node::after { content: ""; position: absolute; left: 13px; top: 28px; bottom: -22px; width: 1px; background: var(--border-strong); z-index: -1; }
+body[data-page="tasks"] .step[data-s="done"]:not(:last-child) .node::after { background: color-mix(in oklch, var(--success) 45%, transparent); }
+body[data-page="tasks"] .step .nm { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding-top: 3px; font-size: 14.5px; }
+body[data-page="tasks"] .step .tool { font: 500 11.5px var(--font-mono); color: var(--muted); }
+body[data-page="tasks"] .step .d { margin-top: 3px; font-size: 13px; color: var(--muted); }
+body[data-page="tasks"] .step[data-s="todo"] { opacity: .55; }
+body[data-page="tasks"] .confirm-band { max-width: 680px; margin-top: 8px; padding: 16px 16px 14px; border-radius: 16px; border: 1px solid color-mix(in oklch, var(--warning) 32%, transparent); background: color-mix(in oklch, var(--warning) 6%, transparent); }
+body[data-page="tasks"] .confirm-band.high { border-color: color-mix(in oklch, var(--danger) 35%, transparent); background: color-mix(in oklch, var(--danger) 6%, transparent); }
+body[data-page="tasks"] .confirm-band .k { font: 500 11.5px var(--font-mono); letter-spacing: .06em; color: var(--warning); }
+body[data-page="tasks"] .confirm-band.high .k { color: var(--danger); }
+body[data-page="tasks"] .confirm-band h3 { margin: 8px 0 6px; font-size: 16px; }
+body[data-page="tasks"] .confirm-band .rows { display: grid; gap: 8px; margin: 12px 0 14px; }
+body[data-page="tasks"] .confirm-band .rows div { display: grid; grid-template-columns: 16px 1fr; gap: 8px; font-size: 13.5px; }
+body[data-page="tasks"] .confirm-band .rows .i { margin-top: 3px; color: var(--muted); }
+body[data-page="tasks"] .confirm-band .rows b { display: block; font-size: 12px; font-weight: 500; color: var(--muted); }
+body[data-page="tasks"] .confirm-band .acts { display: flex; gap: 8px; }
+body[data-page="tasks"] .outcome { max-width: 680px; margin-top: 18px; display: grid; gap: 10px; }
+body[data-page="tasks"] .diff { font: 12.5px/1.6 var(--font-mono); color: var(--muted); }
+body[data-page="tasks"] .skel-list { display: grid; gap: 14px; padding: 12px; }
+@media (max-width: 1100px) {
+body[data-page="tasks"] .taskpage { grid-template-columns: 280px minmax(0, 1fr); }
+body[data-page="tasks"] .dhead, body[data-page="tasks"] .dbody { padding-left: 20px; padding-right: 20px; }
+}

@@ -1,0 +1,159 @@
+/* Ported from conversations.html. */
+body[data-page="conversations"] { overflow: hidden; }
+body[data-page="conversations"] .page-veil { --veil: 64%; }
+body[data-page="conversations"] .conv { display: grid; grid-template-columns: var(--idx-w, 288px) minmax(0, 1fr) var(--ctx-w, 300px); transition: grid-template-columns var(--dur-page) var(--ease); }
+body[data-page="conversations"].idx-collapsed .conv { --idx-w: 0px; }
+body[data-page="conversations"].ctx-hidden .conv { --ctx-w: 0px; }
+body[data-page="conversations"] .index { min-width: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); border-right: 1px solid var(--border); transition: opacity var(--dur-panel) var(--ease); }
+body[data-page="conversations"].idx-collapsed .index { opacity: 0; pointer-events: none; }
+body[data-page="conversations"] .index-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 12px 12px 20px; }
+body[data-page="conversations"] .index-head h1 { font-size: 20px; font-weight: 560; letter-spacing: -0.02em; }
+body[data-page="conversations"] .index-head .n { margin-left: 8px; font: 500 12px var(--font-mono); color: var(--muted); }
+body[data-page="conversations"] .search { position: relative; margin: 0 12px 4px 16px; }
+body[data-page="conversations"] .search > .i { position: absolute; left: 11px; top: 10px; color: var(--muted); pointer-events: none; }
+body[data-page="conversations"] .search .input { height: 36px; padding-left: 34px; padding-right: 34px; }
+body[data-page="conversations"] .search .clear { position: absolute; right: 3px; top: 3px; }
+body[data-page="conversations"] .sessions { padding: 0 8px 20px 10px; }
+body[data-page="conversations"] .sessions h3 { padding: 16px 10px 6px; font: 500 11px var(--font-mono); letter-spacing: .08em; color: var(--muted); }
+body[data-page="conversations"] .srow { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; row-gap: 3px; align-items: center; width: 100%; padding: 9px 10px; border-radius: 10px; text-align: left; transition: background var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .srow:hover { background: var(--hover); }
+body[data-page="conversations"] .srow[aria-current="true"] { background: var(--press); box-shadow: var(--sheen); }
+body[data-page="conversations"] .srow > .i { color: var(--muted); }
+body[data-page="conversations"] .srow[aria-current="true"] > .i { color: var(--fg); }
+body[data-page="conversations"] .srow .t { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body[data-page="conversations"] .srow time { font: 500 11px var(--font-mono); color: var(--muted); }
+body[data-page="conversations"] .srow .x { grid-column: 2 / 4; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body[data-page="conversations"] .srow .busy { width: 12px; height: 12px; animation: spin 1s linear infinite; color: var(--fg); }
+body[data-page="conversations"] .srow mark { background: color-mix(in oklch, var(--accent) 24%, transparent); color: var(--fg); border-radius: 3px; padding: 0 1px; }
+body[data-page="conversations"] .sessions .empty-state { padding: 40px 12px; }
+body[data-page="conversations"] .main { position: relative; min-width: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+body[data-page="conversations"] .col { width: min(800px, calc(100% - 56px)); margin: 0 auto; }
+body[data-page="conversations"] .chead { display: flex; align-items: center; gap: 14px; padding: 14px 0 10px; }
+body[data-page="conversations"] .chead .core-slot { --slot: 64px; }
+body[data-page="conversations"] .chead .ttl { flex: 1; min-width: 0; }
+body[data-page="conversations"] .chead h2 { font-size: 20px; font-weight: 560; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body[data-page="conversations"] .chead .rename { width: 100%; height: 34px; font: 560 18px var(--font-display); }
+body[data-page="conversations"] .chead .meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+body[data-page="conversations"] .chead .meta .state { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); }
+body[data-page="conversations"] .chead .meta .state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--state-c, var(--soft)); }
+body[data-page="conversations"] [data-state="listening"] { --state-c: var(--warning); }
+body[data-page="conversations"] [data-state="thinking"] { --state-c: var(--violet); }
+body[data-page="conversations"] [data-state="vision"] { --state-c: var(--accent); }
+body[data-page="conversations"] [data-state="speaking"] { --state-c: var(--soft); }
+body[data-page="conversations"] [data-state="executing"] { --state-c: var(--aurora); }
+body[data-page="conversations"] [data-state="error"] { --state-c: var(--danger); }
+body[data-page="conversations"] .chead .acts { display: flex; gap: 2px; }
+body[data-page="conversations"] .more-menu { top: calc(100% + 6px); right: 0; width: 220px; --origin: top right; }
+body[data-page="conversations"] .chead-wrap { position: relative; }
+body[data-page="conversations"] .stream { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+body[data-page="conversations"] .stream .col { padding: 8px 0 36px; }
+body[data-page="conversations"] .composer { padding: 6px 0 18px; }
+body[data-page="conversations"] .ex + .ex { margin-top: 36px; padding-top: 32px; border-top: 1px solid var(--border); }
+body[data-page="conversations"] .who { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font: 500 11.5px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted); }
+body[data-page="conversations"] .who .mark { width: 14px; height: 14px; color: var(--fg); }
+body[data-page="conversations"] .who .i { width: 12px; height: 12px; }
+body[data-page="conversations"] .ask { font: 500 17px/1.55 var(--font-display); letter-spacing: -0.01em; color: var(--fg); }
+body[data-page="conversations"] .ask-ctx { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+body[data-page="conversations"] .ask-ctx .ctx-chip { animation: none; }
+body[data-page="conversations"] .shot { position: relative; display: block; max-width: 360px; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-pop); transition: transform var(--dur-micro) var(--ease), box-shadow var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .shot:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px color-mix(in oklch, var(--fg) 30%, transparent), var(--shadow-pop); }
+body[data-page="conversations"] .shot img { display: block; width: 100%; height: auto; }
+body[data-page="conversations"] .shot .cap { position: absolute; left: 8px; bottom: 8px; }
+body[data-page="conversations"] .shot .cap .pill { background: var(--glass-strong); backdrop-filter: var(--blur-glass); -webkit-backdrop-filter: var(--blur-glass); }
+body[data-page="conversations"] .a { margin-top: 22px; }
+body[data-page="conversations"] .activity { margin: 0 0 16px; border-radius: 12px; border: 1px solid var(--border); background: color-mix(in oklch, var(--bg) 60%, transparent); }
+body[data-page="conversations"] .activity summary { list-style: none; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 12px; cursor: pointer; font-size: 13px; color: var(--muted); transition: background var(--dur-micro) var(--ease), color var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .activity summary::-webkit-details-marker { display: none; }
+body[data-page="conversations"] .activity summary:hover { color: var(--fg); background: var(--wash); }
+body[data-page="conversations"] .activity summary .chev { margin-left: auto; transition: transform var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .activity[open] summary .chev { transform: rotate(90deg); }
+body[data-page="conversations"] .activity[data-s="active"] summary > .i:first-child { animation: spin 1s linear infinite; color: var(--fg); }
+body[data-page="conversations"] .activity[data-s="fail"] summary > .i:first-child { color: var(--danger); }
+body[data-page="conversations"] .activity ol { list-style: none; margin: 0; padding: 2px 12px 10px; position: relative; }
+body[data-page="conversations"] .activity li { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 7px 0; font-size: 13px; animation: rise var(--dur-panel) var(--ease) both; }
+body[data-page="conversations"] .activity li + li::before { content: ""; position: absolute; left: 6.5px; top: -6px; height: 12px; width: 1px; background: var(--border-strong); }
+body[data-page="conversations"] .activity li > .i { margin-top: 2px; color: var(--muted); }
+body[data-page="conversations"] .activity li[data-s="done"] > .i { color: var(--success); }
+body[data-page="conversations"] .activity li[data-s="active"] > .i { animation: spin 1s linear infinite; color: var(--fg); }
+body[data-page="conversations"] .activity li[data-s="fail"] > .i { color: var(--danger); }
+body[data-page="conversations"] .activity li[data-s="wait"] > .i { color: var(--warning); }
+body[data-page="conversations"] .activity li .nm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+body[data-page="conversations"] .activity li .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+body[data-page="conversations"] .activity li .t { font: 500 11.5px var(--font-mono); color: var(--muted); }
+body[data-page="conversations"] .answer { font-size: 15.5px; line-height: 1.78; color: var(--fg); }
+body[data-page="conversations"] .answer > * + * { margin-top: 12px; }
+body[data-page="conversations"] .answer h3 { font-size: 15px; font-weight: 600; margin-top: 22px; }
+body[data-page="conversations"] .answer ul, body[data-page="conversations"] .answer ol { margin: 0; padding-left: 1.3em; }
+body[data-page="conversations"] .answer li + li { margin-top: 6px; }
+body[data-page="conversations"] .answer li::marker { color: var(--muted); font-family: var(--font-mono); font-size: .9em; }
+body[data-page="conversations"] .answer p code, body[data-page="conversations"] .answer li code { font-family: var(--font-mono); font-size: .88em; padding: 1px 6px; border-radius: 5px; background: var(--hover); }
+body[data-page="conversations"] .answer strong { font-weight: 600; }
+body[data-page="conversations"] .answer table { width: 100%; border-collapse: collapse; font-size: 14px; }
+body[data-page="conversations"] .answer th, body[data-page="conversations"] .answer td { text-align: left; padding: 9px 4px; border-bottom: 1px solid var(--border); }
+body[data-page="conversations"] .answer th { font: 500 11.5px var(--font-mono); letter-spacing: .04em; color: var(--muted); }
+body[data-page="conversations"] .answer td.n, body[data-page="conversations"] .answer th.n { font-family: var(--font-mono); text-align: right; }
+body[data-page="conversations"] .answer .foot { font-size: 12px; color: var(--muted); }
+body[data-page="conversations"] .answer .code { margin-top: 16px; }
+body[data-page="conversations"] .answer.streaming > p:last-child::after, body[data-page="conversations"] .answer.streaming > :is(ul, ol):last-child > li:last-child::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 3px; vertical-align: -2px; border-radius: 2px; background: var(--fg); animation: beat 1s steps(2) infinite; }
+body[data-page="conversations"] .result { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 10px 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--wash); animation: rise var(--dur-panel) var(--ease) both; }
+body[data-page="conversations"] .result .ri { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--hover); }
+body[data-page="conversations"] .result b { display: block; font-size: 14px; font-weight: 560; line-height: 1.4; }
+body[data-page="conversations"] .result span { display: block; font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+body[data-page="conversations"] .result .acts { display: flex; gap: 6px; }
+body[data-page="conversations"] .answer .notice { font-size: 13.5px; line-height: 1.55; }
+body[data-page="conversations"] .answer-actions { display: flex; align-items: center; gap: 2px; margin: 12px 0 0 -8px; opacity: 0; transition: opacity var(--dur-panel) var(--ease); }
+body[data-page="conversations"] .ex:hover .answer-actions, body[data-page="conversations"] .ex:focus-within .answer-actions, body[data-page="conversations"] .ex:last-child .answer-actions { opacity: 1; }
+body[data-page="conversations"] .answer-actions .grow { flex: 1; }
+body[data-page="conversations"] .answer-actions .meta { font: 500 11px var(--font-mono); color: var(--muted); padding-right: 4px; }
+body[data-page="conversations"] .stopped-tag { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+body[data-page="conversations"] .skel-ex { display: grid; gap: 12px; padding-top: 10px; }
+body[data-page="conversations"] .fresh { display: none; place-content: center; justify-items: center; text-align: center; gap: 6px; padding: 0 24px 6vh; }
+body[data-page="conversations"] .is-new .fresh { display: grid; }
+body[data-page="conversations"] .is-new .chead-wrap, body[data-page="conversations"] .is-new .stream { display: none; }
+body[data-page="conversations"] .is-new .main { grid-template-rows: minmax(0, 1fr) auto; }
+body[data-page="conversations"] .fresh .core-slot { --slot: clamp(180px, 30vh, 260px); margin-bottom: 4px; }
+body[data-page="conversations"] .fresh h2 { font-size: var(--fs-display); font-weight: 520; letter-spacing: -0.025em; }
+body[data-page="conversations"] .fresh p { color: var(--muted); font-size: 14.5px; }
+body[data-page="conversations"] .fresh .sugs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 18px; max-width: 640px; }
+body[data-page="conversations"] .fresh .sugs button { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px; border-radius: var(--r-pill); border: 1px solid var(--border-strong); background: var(--wash); font-size: 13px; transition: background var(--dur-micro) var(--ease), border-color var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .fresh .sugs button:hover { background: var(--hover); border-color: color-mix(in oklch, var(--fg) 26%, transparent); }
+body[data-page="conversations"] .fresh .sugs .i { color: var(--muted); }
+body[data-page="conversations"] .ctx { min-width: 0; overflow: hidden auto; border-left: 1px solid var(--border); padding: 20px 20px 24px; transition: opacity var(--dur-panel) var(--ease); scrollbar-width: thin; }
+body[data-page="conversations"].ctx-hidden .ctx { opacity: 0; pointer-events: none; }
+body[data-page="conversations"] .ctx-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+body[data-page="conversations"] .ctx-head h2 { font-size: 15px; }
+body[data-page="conversations"] .ctx section + section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }
+body[data-page="conversations"] .ctx h3 { margin-bottom: 10px; font: 500 11px var(--font-mono); letter-spacing: .08em; color: var(--muted); }
+body[data-page="conversations"] .ctx .line { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 5px 0; font-size: 13px; }
+body[data-page="conversations"] .ctx .line > .i { margin-top: 2px; color: var(--muted); }
+body[data-page="conversations"] .ctx .line .s { display: block; font-size: 12px; color: var(--muted); }
+body[data-page="conversations"] .ctx .line .c { font: 500 11px var(--font-mono); color: var(--muted); }
+body[data-page="conversations"] .ctx a.line { border-radius: 8px; margin: 0 -8px; padding: 6px 8px; transition: background var(--dur-micro) var(--ease); }
+body[data-page="conversations"] .ctx a.line:hover { background: var(--hover); }
+body[data-page="conversations"] .ctx .thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+body[data-page="conversations"] .ctx .thumbs button { border-radius: 8px; overflow: hidden; box-shadow: 0 0 0 1px var(--border-strong); }
+body[data-page="conversations"] .ctx .thumbs img { display: block; width: 100%; height: auto; }
+body[data-page="conversations"] .ctx .none { font-size: 12.5px; color: var(--muted); }
+body[data-page="conversations"] .ctx .privacy { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+body[data-page="conversations"] .ctx .privacy .i { margin-top: 2px; flex: none; color: var(--success); }
+body[data-page="conversations"] .ctx .privacy.cloud .i { color: var(--warning); }
+body[data-page="conversations"] .ctx-close { display: none; }
+@media (max-width: 1439px) {
+body[data-page="conversations"] .conv { --ctx-w: 0px !important; }
+body[data-page="conversations"] .ctx { position: fixed; z-index: 50; top: calc(var(--titlebar-h) + 6px); bottom: 12px; right: 12px; width: 320px; border: 0; border-radius: 18px;
+      background: var(--glass-strong); backdrop-filter: var(--blur-glass); -webkit-backdrop-filter: var(--blur-glass); box-shadow: var(--sheen), var(--shadow-pop);
+      transform: translateX(calc(100% + 24px)); visibility: hidden; opacity: 1; pointer-events: auto; transition: transform var(--dur-page) var(--ease), visibility 0s linear var(--dur-page); }
+body[data-page="conversations"] .ctx-open .ctx { transform: none; visibility: visible; transition-delay: 0s; }
+body[data-page="conversations"] .ctx-close { display: inline-grid; }
+}
+@media (max-width: 1119px) {
+body[data-page="conversations"] .conv { --idx-w: 0px !important; }
+body[data-page="conversations"] .index { position: fixed; z-index: 50; top: calc(var(--titlebar-h) + 6px); bottom: 12px; left: 12px; width: 300px; border: 0; border-radius: 18px;
+      background: var(--glass-strong); backdrop-filter: var(--blur-glass); -webkit-backdrop-filter: var(--blur-glass); box-shadow: var(--sheen), var(--shadow-pop);
+      transform: translateX(calc(-100% - 24px)); visibility: hidden; opacity: 1; pointer-events: auto; transition: transform var(--dur-page) var(--ease), visibility 0s linear var(--dur-page); }
+body[data-page="conversations"] .idx-open .index { transform: none; visibility: visible; transition-delay: 0s; }
+}
+@media (max-height: 740px) {
+body[data-page="conversations"] .fresh .core-slot { --slot: 150px; }
+body[data-page="conversations"] .fresh .sugs { margin-top: 12px; }
+}

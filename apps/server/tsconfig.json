@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    "rootDir": ".",
+    "noEmit": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "drizzle.config.ts"],
+  "exclude": ["**/*.spec.ts"]
+}

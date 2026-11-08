@@ -1,0 +1,26 @@
+{
+  "name": "@aura/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json --noEmit && vite build"
+  },
+  "dependencies": {
+    "@aura/api-client": "workspace:*",
+    "@aura/platform": "workspace:*",
+    "@aura/shared-types": "workspace:*",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
