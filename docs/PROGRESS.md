@@ -11,9 +11,22 @@
 
 ## 当前阶段
 
-**Phase 2 设计系统与页面还原已完成。不要自行开始 Phase 3。**
+**Phase 3 后端基础已接到数据库，页面仍使用标明过的演示数据。**
 
-Phase 0 审计、Phase 1 工程骨架已完成。没有 Electron，没有真实对话、登录或业务表。
+Phase 2 界面验收已完成。真实模型对话属于 Phase 4，这一阶段没有调用模型。
+
+### Phase 3 已接上
+
+- 表：`users`、`sessions`、`conversations`、`messages`、`provider_configs`、`audit_logs`。迁移文件是 `apps/server/drizzle/0001_phase3.sql`
+- 登录 `POST /api/v1/auth/login` 写入 HttpOnly、SameSite=Lax 的 `aura_session`。生产环境再加 Secure。退出和 `GET /api/v1/auth/me` 已接上。没有公开注册
+- 库里还没有用户、且同时配置了 `AURA_BOOTSTRAP_EMAIL` 与 `AURA_BOOTSTRAP_PASSWORD` 时，启动会创建第一个账号。密码短于 8 位不会创建
+- 会话和消息按 `user_id` 隔离。别人的会话返回 404。消息按 sequence 保存，这一阶段只入库，不生成回复
+- 提供方密钥用 AES-256-GCM 加密。列表和创建响应只有 `keyConfigured` 与末四位 `keyHint`
+- 登录、退出、会话和提供方变更写入审计日志，日志里不放密钥和密码
+- 开发环境 Swagger 在 `/api/v1/docs`，使用 cookie `aura_session`
+- 集成测试覆盖隔离、消息历史、密钥加密和错误密码。2026-11-08 通过
+
+页面上的对话、任务和记忆仍是浏览器里的演示。下一步可以把这些页面改成读写上面的接口。
 
 ### Phase 2 验收
 
@@ -89,7 +102,7 @@ corepack pnpm dev
 - 核心画质的「省电 / 高画质」会调用核心的画质切换。图形设备名称来自这台机器的 WebGL 渲染器
 - 任务详情标题带状态：待确认、进行中、已完成、失败
 
-Phase 2 验收已通过。下一步若要继续，才进入 Phase 3：登录、业务表和真实模型对话。在此之前保持演示回复，也不要做 Electron。
+Phase 2 验收已通过。Phase 3 的接口和集成测试已通过；页面仍使用演示数据。真实模型对话属于 Phase 4，不要做 Electron。
 
 ## 不要动
 

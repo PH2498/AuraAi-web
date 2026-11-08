@@ -41,6 +41,7 @@ async function bootstrap(): Promise<void> {
       .setTitle('AURA API')
       .setDescription('AURA AI HTTP API')
       .setVersion('0.0.0')
+      .addCookieAuth('aura_session')
       .build();
     SwaggerModule.setup('docs', app, SwaggerModule.createDocument(app, swaggerConfig));
   }

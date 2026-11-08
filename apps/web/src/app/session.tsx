@@ -201,9 +201,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
         return { ok: true, active: true };
       } catch (error) {
-        setAura('idle');
         const message = error instanceof PlatformCapabilityError ? error.message : '无法打开这一路感知';
-        toast(message);
+        toast(message, { icon: 'circle-alert' });
+        setAura('error');
         return { ok: false, message };
       }
     },

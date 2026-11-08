@@ -18,6 +18,8 @@ const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().optional().default(''),
   GEMINI_API_KEY: z.string().optional().default(''),
   ANTHROPIC_API_KEY: z.string().optional().default(''),
+  AURA_BOOTSTRAP_EMAIL: z.string().optional().default(''),
+  AURA_BOOTSTRAP_PASSWORD: z.string().optional().default(''),
 });
 
 export type AppEnv = z.infer<typeof EnvSchema>;

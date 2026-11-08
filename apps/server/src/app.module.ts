@@ -3,7 +3,11 @@ import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { AuditModule } from './modules/audit/audit.module';
+import { ConversationsModule } from './modules/conversations/conversations.module';
 import { HealthModule } from './modules/health/health.module';
+import { ProvidersModule } from './modules/providers/providers.module';
 
 @Module({
   imports: [
@@ -13,7 +17,13 @@ import { HealthModule } from './modules/health/health.module';
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
         redact: {
-          paths: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]'],
+          paths: [
+            'req.headers.authorization',
+            'req.headers.cookie',
+            'req.headers["x-api-key"]',
+            'req.body.password',
+            'req.body.apiKey',
+          ],
           remove: true,
         },
         genReqId: (request, response) => {
@@ -32,6 +42,10 @@ import { HealthModule } from './modules/health/health.module';
     }),
     DatabaseModule,
     HealthModule,
+    AuditModule,
+    AuthModule,
+    ConversationsModule,
+    ProvidersModule,
   ],
 })
 export class AppModule {}
