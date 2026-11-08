@@ -15,6 +15,7 @@ export class AuraCore3D {
   quality: string;
   dust?: { visible: boolean };
   setQuality(level: 'auto' | 'high' | 'low'): void;
+  setHomeProfile(on: boolean): void;
   setFps(fps: number): void;
   setState(name: AuraState): void;
   setLevel(value: number): void;

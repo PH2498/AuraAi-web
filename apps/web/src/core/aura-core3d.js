@@ -369,6 +369,8 @@ export class AuraCore3D {
     this.press = 0; this.pressT = 0;
     this._q = new THREE.Quaternion(); this._v = new THREE.Vector3();
     this.fps = 60; this._fpsAcc = []; this.quality = this.opts.quality === 'low' ? 'low' : 'high';
+    this._samples = Number.isFinite(this.opts.samples) ? this.opts.samples : (this.quality === 'low' ? 0 : 4);
+    this.homeProfile = this.opts.homeProfile === true;
     this.phases = { orbit: 0, ring: 0, rip: 0, flow: 0, time: 0 };
 
     const T = readTokens();
@@ -488,7 +490,7 @@ export class AuraCore3D {
     const r = this.renderer;
     this.dpr = Math.min(devicePixelRatio || 1, this.quality === 'low' ? 1 : 2);
     r.setPixelRatio(this.dpr);
-    const rt = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, samples: this.quality === 'low' ? 0 : 4 });
+    const rt = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, samples: this._samples || 0 });
     this.bloom?.dispose();
     this.composer?.dispose();
     this.composer = new EffectComposer(r, rt);
@@ -507,7 +509,8 @@ export class AuraCore3D {
     this.w = w; this.h = h;
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(this.dpr); this.composer.setSize(w, h);
-    if (this.bloom) this.bloom.resolution.set(w / 2, h / 2);
+    if (this.bloom && this.homeProfile) this.bloom.setSize(w, h);
+    else if (this.bloom) this.bloom.resolution.set(w / 2, h / 2);
     this.camera.aspect = w / h; this.camera.updateProjectionMatrix();
     this.ppu = (h / 2) / (Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.position.z);
     this.U.uRes.value.set(w * this.dpr, h * this.dpr);
@@ -554,9 +557,32 @@ export class AuraCore3D {
     s.vy = s.vy * .5 + (dx * .007 / dt) * .5;
   }
   setQuality(q) {
-    this.opts.quality = q;
-    const next = q === 'low' ? 'low' : 'high';
-    if (next !== this.quality) { this.quality = next; this._setupComposer(); this.resize(); }
+    if (q !== 'low') {
+      this.setHomeProfile(true);
+      return;
+    }
+    this.opts.quality = 'low';
+    if (this.quality === 'low' && this._samples === 0 && !this.homeProfile) return;
+    this.homeProfile = false;
+    this.quality = 'low';
+    this._samples = 0;
+    this._setupComposer();
+    this.resize();
+  }
+  /** Homepage keeps bloom, particles and the detailed shell, and presents every refresh. */
+  setHomeProfile(on) {
+    this.setFps(0);
+    if (!on) {
+      this.homeProfile = false;
+      return;
+    }
+    if (this.homeProfile && this.quality === 'high' && this._samples === 0) return;
+    this.homeProfile = true;
+    this.opts.quality = 'high';
+    this.quality = 'high';
+    this._samples = 0;
+    this._setupComposer();
+    this.resize();
   }
   /** Cap the render loop. 0 follows the display refresh rate. */
   setFps(fps) {

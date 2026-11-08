@@ -236,9 +236,9 @@ a { color: inherit; text-decoration: none; }
   backdrop-filter: var(--blur-glass); -webkit-backdrop-filter: var(--blur-glass); box-shadow: var(--sheen);
 }
 .navcap-ind {
-  position: absolute; top: 3px; bottom: 3px; left: 0; width: 0; border-radius: var(--r-pill);
+  position: absolute; top: 3px; bottom: 3px; left: 0; border-radius: var(--r-pill);
   background: var(--press); box-shadow: var(--sheen);
-  transition: transform var(--dur-panel) var(--ease), width var(--dur-panel) var(--ease);
+  transition: transform var(--dur-panel) var(--ease), opacity var(--dur-micro) var(--ease);
 }
 .navcap a {
   position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px;
@@ -432,9 +432,8 @@ a { color: inherit; text-decoration: none; }
   background: radial-gradient(circle at var(--cx, 50%) var(--cy, 0px), transparent calc(var(--cr, 80px) * .8), color-mix(in oklch, var(--bg) var(--veil, 56%), transparent) calc(var(--cr, 80px) * 2.8));
 }
 .page { position: fixed; inset: var(--titlebar-h) 0 0 0; z-index: 2; }
-[data-enter] { animation: page-in var(--dur-page) var(--ease) both; animation-delay: calc(var(--enter, 0) * 50ms); }
-body.leaving .page { opacity: 0; transform: translateY(-4px); filter: blur(4px); transition: opacity 220ms var(--ease-exit), transform 220ms var(--ease-exit), filter 220ms var(--ease-exit); }
-@keyframes page-in { from { opacity: 0; transform: translateY(8px); filter: blur(6px); } }
+[data-enter] { animation: page-in 220ms var(--ease) both; animation-delay: calc(var(--enter, 0) * 30ms); }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
 
 .core-slot { position: relative; flex: none; width: var(--slot, 96px); height: var(--slot, 96px); border-radius: 50%; touch-action: none; }
 button.core-slot { cursor: pointer; }

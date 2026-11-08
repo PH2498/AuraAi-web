@@ -96,15 +96,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       const next = `${url.pathname}${url.search}${url.hash}`;
       const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       const section = (pathname: string) => pathname.split('/').filter(Boolean)[0] ?? '';
-      if (next === here || section(url.pathname) === section(window.location.pathname) || document.body.classList.contains('leaving')) return;
+      if (next === here || section(url.pathname) === section(window.location.pathname)) return;
       event.preventDefault();
       event.stopPropagation();
-      document.body.classList.add('leaving');
-      const wait = document.documentElement.classList.contains('reduce-motion') ? 0 : 220;
-      window.setTimeout(() => {
-        document.body.classList.remove('leaving');
-        navigate(next);
-      }, wait);
+      navigate(next);
     };
     document.addEventListener('click', onClick, true);
     return () => document.removeEventListener('click', onClick, true);
@@ -199,7 +194,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       reduced={reduced}
       dust={settings.dust}
       quality={settings.quality}
-      page={page}
       levelRef={levelRef}
       onFallback={() => toast('图形渲染已暂停，已切换到兼容模式')}
     >

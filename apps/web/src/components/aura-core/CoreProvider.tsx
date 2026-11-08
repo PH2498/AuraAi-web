@@ -31,7 +31,6 @@ export function CoreProvider({
   reduced,
   dust,
   quality,
-  page,
   levelRef,
   onFallback,
   children,
@@ -40,7 +39,6 @@ export function CoreProvider({
   reduced: boolean;
   dust: boolean;
   quality: 'auto' | 'high' | 'low';
-  page: string;
   levelRef?: RefObject<number>;
   onFallback?: () => void;
   children: ReactNode;
@@ -54,9 +52,7 @@ export function CoreProvider({
   const fallbackRef = useRef(onFallback);
   fallbackRef.current = onFallback;
   const reportedFallback = useRef(false);
-  const pageRef = useRef(page);
   const qualityRef = useRef(quality);
-  pageRef.current = page;
   qualityRef.current = quality;
   if (!apiRef.current) {
     apiRef.current = {
@@ -82,12 +78,14 @@ export function CoreProvider({
     let core: AuraCore3D;
     try {
       if (!AuraCore3D.supported()) throw new Error('no webgl2');
-      const home = pageRef.current === 'home';
+      const low = qualityRef.current === 'low';
       core = new AuraCore3D(canvas, {
         particles: 3600,
         dust: 520,
-        quality: home ? 'high' : qualityRef.current,
-        fps: home ? 60 : 0,
+        quality: low ? 'low' : 'high',
+        samples: 0,
+        homeProfile: !low,
+        fps: 0,
       });
       document.body.classList.remove('no-webgl');
     } catch {
@@ -100,6 +98,18 @@ export function CoreProvider({
     }
     coreRef.current = core;
     let lastHit = 0;
+    let placed = false;
+    let followUntil = 0;
+    let reading = document.body.classList.contains('reading');
+    let observed: HTMLElement | null = null;
+    let veil: HTMLElement | null = null;
+    let veilKey = '';
+    const invalidate = () => {
+      placed = false;
+    };
+    const observer = new ResizeObserver(invalidate);
+    const onScroll = () => invalidate();
+    window.addEventListener('scroll', onScroll, true);
     const stop = core.onFrame((event) => {
       if (event?.lost) {
         document.body.classList.add('no-webgl');
@@ -111,42 +121,61 @@ export function CoreProvider({
       }
       const slot = slotRef.current;
       if (!slot) return;
-      const rect = slot.getBoundingClientRect();
-      if (!rect.width) return;
-      const anchor = slot.closest('.core-anchor');
-      if (anchor instanceof HTMLElement && document.body.dataset.page === 'home') {
-        const box = anchor.getBoundingClientRect();
-        if (!box.height) return;
-        const reading = document.body.classList.contains('reading');
-        const fit = Math.min(box.height / 2, box.width / 2.3);
-        const grow = reading ? 1 : 1.72;
-        const radius = Math.max(40, Math.min(fit * grow, box.width / 2.1, (box.width - 440) / 1.7));
-        core.setFrame({
-          cx: box.left + box.width / 2,
-          cy: box.top + box.height / 2,
-          r: radius,
-        });
-        const hit = Math.round((radius / 2.7) * 2.3);
-        if (hit !== lastHit) {
-          anchor.style.setProperty('--hit', `${hit}px`);
-          lastHit = hit;
+      if (slot !== observed) {
+        if (observed) observer.unobserve(observed);
+        observer.observe(slot.closest<HTMLElement>('.core-anchor') ?? slot);
+        observed = slot;
+        placed = false;
+      }
+      const readingNow = document.body.classList.contains('reading');
+      if (readingNow !== reading) {
+        reading = readingNow;
+        followUntil = performance.now() + 700;
+      }
+      if (performance.now() < followUntil) placed = false;
+      if (!placed) {
+        const rect = slot.getBoundingClientRect();
+        if (!rect.width) return;
+        const anchor = slot.closest('.core-anchor');
+        if (anchor instanceof HTMLElement && document.body.dataset.page === 'home') {
+          const box = anchor.getBoundingClientRect();
+          if (!box.height) return;
+          const fit = Math.min(box.height / 2, box.width / 2.3);
+          const grow = reading ? 1 : 1.72;
+          const radius = Math.max(40, Math.min(fit * grow, box.width / 2.1, (box.width - 440) / 1.7));
+          core.setFrame({
+            cx: box.left + box.width / 2,
+            cy: box.top + box.height / 2,
+            r: radius,
+          });
+          const hit = Math.round((radius / 2.7) * 2.3);
+          if (hit !== lastHit) {
+            anchor.style.setProperty('--hit', `${hit}px`);
+            lastHit = hit;
+          }
+        } else {
+          core.setFrame({
+            cx: rect.left + rect.width / 2,
+            cy: rect.top + rect.height / 2,
+            r: Math.min(rect.width, rect.height) / 2,
+          });
         }
-      } else {
-        core.setFrame({
-          cx: rect.left + rect.width / 2,
-          cy: rect.top + rect.height / 2,
-          r: Math.min(rect.width, rect.height) / 2,
-        });
+        placed = true;
       }
       core.setLevel(levelHolder.current?.current ?? 0);
       const center = core.center();
-      const veil = document.querySelector<HTMLElement>('.page-veil');
+      const key = `${Math.round(center.x)}:${Math.round(center.y)}:${Math.round(center.r)}`;
+      if (key === veilKey) return;
+      veilKey = key;
+      if (!veil?.isConnected) veil = document.querySelector<HTMLElement>('.page-veil');
       veil?.style.setProperty('--cx', `${center.x}px`);
       veil?.style.setProperty('--cy', `${center.y}px`);
       veil?.style.setProperty('--cr', `${center.r}px`);
     });
     return () => {
       stop();
+      observer.disconnect();
+      window.removeEventListener('scroll', onScroll, true);
       core.destroy();
       coreRef.current = null;
     };
@@ -161,10 +190,9 @@ export function CoreProvider({
     if (!core) return;
     core.reduced = reduced;
     if (core.dust) core.dust.visible = dust;
-    const home = page === 'home';
-    core.setQuality(home ? 'high' : quality);
-    core.setFps(home ? 60 : 0);
-  }, [reduced, dust, quality, page]);
+    if (quality === 'low') core.setQuality('low');
+    else core.setHomeProfile(true);
+  }, [reduced, dust, quality]);
 
   return (
     <CoreContext.Provider value={apiRef.current}>
