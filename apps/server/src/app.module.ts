@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { AppConfigModule } from './config/config.module';
 import { DatabaseModule } from './database/database.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AgentModule } from './modules/agent/agent.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
@@ -46,6 +47,7 @@ import { ProvidersModule } from './modules/providers/providers.module';
     AuditModule,
     AuthModule,
     AiModule,
+    AgentModule,
     ConversationsModule,
     ProvidersModule,
   ],

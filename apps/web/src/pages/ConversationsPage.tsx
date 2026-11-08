@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../app/session';
-import { useCoreSlot } from '../components/aura-core/CoreProvider';
+import { useCore, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
@@ -34,6 +34,7 @@ export function ConversationsPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const skipRename = useRef(false);
   const slot = useCoreSlot<HTMLButtonElement>(true);
+  const core = useCore();
 
   const library = useMemo<Thread[]>(() => {
     const fixtures = CONVERSATIONS.filter((item) => !overlay[item.id]?.hidden).map((item) => ({
@@ -187,6 +188,7 @@ export function ConversationsPage() {
       stopRef.current = controller;
       setBusy(true);
       setAura('thinking');
+      core.setTicks(2, 0);
       const userMessage: ServerMessage = {
         id: `pending-${Date.now()}`,
         role: 'user',
@@ -210,16 +212,19 @@ export function ConversationsPage() {
       };
       try {
         if (!cloud) await ensureOllama(settings.ollamaUrl, model);
+        core.setTicks(2, 1);
         await streamReply(
           { message: ask, conversationId: live ? selectedId : undefined, provider: cloud ? 'openai' : 'ollama', model },
           {
             signal: controller.signal,
             onStart: (event) => {
               setAura('speaking');
+              core.setTicks(2, 2);
               if (!live) navigate(`/conversations/${event.conversationId}`);
             },
             onDelta: (chunk) => {
               answer += chunk;
+              core.setAmplitude(0.25 + Math.min(0.7, chunk.length / 24));
               if (!frame) frame = window.requestAnimationFrame(paint);
             },
           },
@@ -241,6 +246,8 @@ export function ConversationsPage() {
       } finally {
         stopRef.current = null;
         setBusy(false);
+        core.setAmplitude(0);
+        core.setTicks(0, 0);
       }
     })();
   };

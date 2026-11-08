@@ -1,13 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../app/session';
-import { useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
+import { useCore, useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { ensureOllama, listConversations, streamReply, type ServerConversation } from '../chat/api';
 import { CONVERSATIONS, SUGGESTIONS } from '../fixtures/content';
 import { MODELS, STATE_LABEL } from '../state/settings';
+
+type Stage = { id: string; label: string; status: 'pending' | 'active' | 'done' | 'fail' };
+
+const THINKING: Stage[] = [
+  { id: 'intent', label: '理解意图', status: 'pending' },
+  { id: 'answer', label: '组织回答', status: 'pending' },
+];
 
 function greeting() {
   const hour = new Date().getHours();
@@ -21,12 +28,15 @@ function greeting() {
 export function HomePage() {
   const { aura, setAura, sensing, toggleSensor, settings, ollamaReady, ollamaModels, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
   const [draft, setDraft] = useState('');
-  const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean } | null>(null);
+  const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean; stages: Stage[] } | null>(null);
   const [focused, setFocused] = useState(false);
   const [sessionQuery, setSessionQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState<ServerConversation[]>([]);
+  const [stages, setStages] = useState<Stage[]>([]);
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const stopRef = useRef<AbortController | null>(null);
+  const core = useCore();
   const slot = useCoreSlot<HTMLButtonElement>(true);
   const pointer = useCorePointer(() => void toggleSensor('mic'));
 
@@ -39,7 +49,11 @@ export function HomePage() {
     };
   }, [reading, suggesting]);
   useEffect(() => {
-    const clear = () => setReading(null);
+    const clear = () => {
+      setReading(null);
+      setStages([]);
+      setNotice(null);
+    };
     document.addEventListener('aura-new-chat', clear);
     return () => document.removeEventListener('aura-new-chat', clear);
   }, []);
@@ -70,7 +84,11 @@ export function HomePage() {
       when: now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }),
     };
     const show = (answer: string, state: 'idle' | 'error' = 'error') => {
-      setReading({ ask, answer, ...stamp, settled: true });
+      setStages([]);
+      core.setTicks(0, 0);
+      core.setAmplitude(0);
+      setReading({ ask, answer, ...stamp, settled: true, stages: THINKING.map((item) => ({ ...item, status: 'fail' })) });
+      setNotice(null);
       setAura(state);
     };
     void (async () => {
@@ -87,43 +105,97 @@ export function HomePage() {
       const controller = new AbortController();
       stopRef.current = controller;
       setBusy(true);
+      setReading(null);
+      setNotice(null);
       setAura('thinking');
-      setReading({ ask, answer: '', ...stamp, settled: false });
+      core.setTicks(2, 0);
+      setStages([
+        { id: 'intent', label: '理解意图', status: 'active' },
+        { id: 'answer', label: '组织回答', status: 'pending' },
+      ]);
       let answer = '';
       let frame = 0;
+      let started = false;
+      const wait = (ms: number) =>
+        new Promise<void>((resolve, reject) => {
+          const timer = window.setTimeout(resolve, ms);
+          controller.signal.addEventListener(
+            'abort',
+            () => {
+              window.clearTimeout(timer);
+              reject(new DOMException('已停止生成', 'AbortError'));
+            },
+            { once: true },
+          );
+        });
       const paint = () => {
         frame = 0;
         setReading((current) => (current && current.ask === ask ? { ...current, answer } : current));
       };
+      const beginReply = () => {
+        if (started) return;
+        started = true;
+        const done = THINKING.map((item) => ({ ...item, status: 'done' as const }));
+        setStages([]);
+        core.setTicks(2, 2);
+        setNotice(null);
+        setReading({ ask, answer, ...stamp, settled: false, stages: done });
+        setAura('speaking');
+        core.setAmplitude(0.45);
+      };
       try {
-        if (!cloud) await ensureOllama(settings.ollamaUrl, model);
+        await Promise.all([cloud ? Promise.resolve() : ensureOllama(settings.ollamaUrl, model), wait(700)]);
+        if (controller.signal.aborted) return;
+        setStages([
+          { id: 'intent', label: '理解意图', status: 'done' },
+          { id: 'answer', label: '组织回答', status: 'active' },
+        ]);
+        core.setTicks(2, 1);
         await streamReply(
           { message: ask, provider: cloud ? 'openai' : 'ollama', model },
           {
             signal: controller.signal,
-            onStart: () => setAura('speaking'),
+            onStart: () => beginReply(),
             onDelta: (text) => {
+              beginReply();
               answer += text;
+              core.setAmplitude(0.25 + Math.min(0.7, text.length / 24));
               if (!frame) frame = window.requestAnimationFrame(paint);
             },
           },
         );
         if (frame) window.cancelAnimationFrame(frame);
+        if (!started) beginReply();
         setReading((current) => (current && current.ask === ask ? { ...current, answer, settled: true } : current));
         setAura('idle');
       } catch (error) {
         if (frame) window.cancelAnimationFrame(frame);
+        const message = error instanceof Error ? error.message : '模型服务暂时不可用';
         if (controller.signal.aborted) {
-          setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || '已停止生成', settled: true } : current));
+          if (started) {
+            setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || '已停止生成', settled: true } : current));
+          } else {
+            setDraft(ask);
+            setNotice(null);
+          }
           setAura('idle');
           return;
         }
-        const message = error instanceof Error ? error.message : '模型服务暂时不可用';
-        setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || message, settled: true } : current));
-        setAura('error');
+        if (started) {
+          setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || message, settled: true } : current));
+          setAura('error');
+        } else {
+          setDraft(ask);
+          setStages((items) => items.map((item) => (item.status === 'active' ? { ...item, status: 'fail' } : item)));
+          setNotice({ text: message, error: true });
+          setAura('error');
+        }
       } finally {
         stopRef.current = null;
         setBusy(false);
+        core.setAmplitude(0);
+        core.setTicks(0, 0);
+        if (started) setStages([]);
       }
     })();
   };
@@ -157,8 +229,27 @@ export function HomePage() {
             <span>{STATE_LABEL[aura]}</span>
           </p>
           <h1>{greeting()}</h1>
-          <p className="status">我在。说出来，或者在下面输入你想做的事。</p>
+          <p className="status">
+            {notice ? (
+              notice.error ? <span className="err">{notice.text}</span> : <b>{notice.text}</b>
+            ) : aura === 'listening' ? (
+              <>
+                <b>正在聆听</b>
+                <span> · 说完停一下，我会接着处理。</span>
+              </>
+            ) : aura === 'vision' ? (
+              <>
+                <b>画面已打开</b>
+                <span> · 这一阶段不会分析画面。</span>
+              </>
+            ) : stages.find((item) => item.status === 'active') ? (
+              <b>{stages.find((item) => item.status === 'active')?.label}</b>
+            ) : (
+              '我在。说出来，或者在下面输入你想做的事。'
+            )}
+          </p>
         </div>
+        <StageTethers stages={stages} />
       </section>
 
       <section className="reply" aria-label="本次会话">
@@ -166,7 +257,7 @@ export function HomePage() {
           <>
             <div className="reply-head">
               <span className="meta">
-                本次会话 · {reading.when} · {reading.settled ? STATE_LABEL.idle : STATE_LABEL.thinking}
+                本次会话 · {reading.when} · {reading.settled ? STATE_LABEL.idle : STATE_LABEL[aura]}
               </span>
               <button type="button" className="btn btn-sm btn-quiet" onClick={() => setReading(null)}>
                 <Icon name="square-pen" className="i i-14" />
@@ -200,14 +291,18 @@ export function HomePage() {
                     <Icon name="chevron-right" className="i i-14 chev" />
                   </summary>
                   <ol>
-                    <li data-s={reading.settled ? 'done' : 'active'}>
-                      <Icon name={reading.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
-                      <div>
-                        写入回复
-                        <div className="d">{reading.settled ? '已保存到会话' : '正在接收模型输出'}</div>
-                      </div>
-                      <span className="t">{reading.settled ? '完成' : ''}</span>
-                    </li>
+                    {reading.stages.map((stage) => (
+                      <li key={stage.id} data-s={stage.status === 'active' ? 'active' : stage.status === 'fail' ? 'fail' : 'done'}>
+                        <Icon
+                          name={stage.status === 'fail' ? 'circle-alert' : stage.status === 'active' ? 'loader-circle' : 'circle-check'}
+                          className="i i-14"
+                        />
+                        <div>
+                          {stage.label}
+                          <div className="d">{stage.status === 'fail' ? '没有完成' : '已完成'}</div>
+                        </div>
+                      </li>
+                    ))}
                   </ol>
                 </details>
                 <div className={`answer${reading.settled ? '' : ' streaming'}`}>
@@ -339,5 +434,76 @@ export function HomePage() {
         </div>
       </aside>
     </main>
+  );
+}
+
+function StageTethers({ stages }: { stages: Stage[] }) {
+  const core = useCore();
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = root.current;
+    if (!host || stages.length === 0) return;
+    let frame = 0;
+    const layout = () => {
+      frame = window.requestAnimationFrame(layout);
+      const center = core.center();
+      const reading = document.body.classList.contains('reading');
+      host.style.opacity = reading || center.r < 130 ? '0' : '1';
+      if (reading || center.r < 130) return;
+      const labels = [...host.querySelectorAll<HTMLElement>('.tlabel')];
+      const paths = [...host.querySelectorAll<SVGPathElement>('path')];
+      const dots = [...host.querySelectorAll<SVGCircleElement>('circle')];
+      const off = center.r * 0.84 + 18;
+      const placed = stages.map((stage, index) => {
+        const point = core.ringPoint(1, (index + 0.5) / stages.length);
+        const side = stages.length === 2 ? (index === 0 ? 'left' : 'right') : point.x < center.x ? 'left' : 'right';
+        const band = Math.max(36, center.r * 0.28);
+        const y = Math.min(window.innerHeight - 150, Math.max(72, Math.min(center.y + band, Math.max(center.y - band, point.y))));
+        return { stage, point, side, y };
+      });
+      placed.forEach((item, index) => {
+        const left = item.side === 'left';
+        const labelX = left ? center.x - off : center.x + off;
+        const label = labels[index];
+        const path = paths[index];
+        const dot = dots[index];
+        if (!label || !path || !dot) return;
+        label.classList.toggle('left', left);
+        label.style.transform = `translate(${left ? labelX - 190 : labelX}px, ${item.y}px) translateY(-50%)`;
+        const endX = left ? labelX + 8 : labelX - 8;
+        const midX = left ? endX + 22 : endX - 22;
+        path.setAttribute('d', `M${item.point.x.toFixed(1)},${item.point.y.toFixed(1)} L${midX.toFixed(1)},${item.y.toFixed(1)} L${endX.toFixed(1)},${item.y.toFixed(1)}`);
+        path.classList.toggle('back', !item.point.front);
+        dot.setAttribute('cx', item.point.x.toFixed(1));
+        dot.setAttribute('cy', item.point.y.toFixed(1));
+        dot.classList.toggle('on', item.stage.status !== 'pending');
+      });
+    };
+    layout();
+    return () => window.cancelAnimationFrame(frame);
+  }, [core, stages]);
+  if (stages.length === 0) return null;
+  return (
+    <div className="tethers" ref={root} aria-hidden="true">
+      <svg>
+        {stages.map((stage) => (
+          <g key={stage.id}>
+            <path />
+            <circle r="2.5" />
+          </g>
+        ))}
+      </svg>
+      {stages.map((stage, index) => (
+        <div key={stage.id} className="tlabel" data-s={stage.status}>
+          <span className="k">
+            {stage.status === 'done' ? <Icon name="circle-check" className="i" /> : null}
+            {stage.status === 'active' ? <Icon name="loader-circle" className="i" /> : null}
+            {stage.status === 'fail' ? <Icon name="circle-alert" className="i" /> : null}
+            {String(index + 1).padStart(2, '0')}
+          </span>
+          <span className="v">{stage.label}</span>
+        </div>
+      ))}
+    </div>
   );
 }

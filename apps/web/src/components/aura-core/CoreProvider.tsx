@@ -13,10 +13,14 @@ import { AuraCore3D, type AuraState } from '../../core/aura-core3d.js';
 type CoreApi = {
   setState: (state: AuraState) => void;
   setLevel: (value: number) => void;
+  setAmplitude: (value: number) => void;
+  setTicks: (count: number, done: number) => void;
   setHover: (on: boolean) => void;
   setPressed: (on: boolean) => void;
   drag: (dx: number, dy: number) => void;
   pulse: () => void;
+  center: () => { x: number; y: number; r: number };
+  ringPoint: (index: number, unit: number) => { x: number; y: number; front: boolean };
   bindSlot: (element: HTMLElement | null) => void;
 };
 
@@ -27,6 +31,7 @@ export function CoreProvider({
   reduced,
   dust,
   quality,
+  page,
   levelRef,
   onFallback,
   children,
@@ -35,6 +40,7 @@ export function CoreProvider({
   reduced: boolean;
   dust: boolean;
   quality: 'auto' | 'high' | 'low';
+  page: string;
   levelRef?: RefObject<number>;
   onFallback?: () => void;
   children: ReactNode;
@@ -48,14 +54,22 @@ export function CoreProvider({
   const fallbackRef = useRef(onFallback);
   fallbackRef.current = onFallback;
   const reportedFallback = useRef(false);
+  const pageRef = useRef(page);
+  const qualityRef = useRef(quality);
+  pageRef.current = page;
+  qualityRef.current = quality;
   if (!apiRef.current) {
     apiRef.current = {
       setState: (next) => coreRef.current?.setState(next),
       setLevel: (value) => coreRef.current?.setLevel(value),
+      setAmplitude: (value) => coreRef.current?.setAmplitude(value),
+      setTicks: (count, done) => coreRef.current?.setTicks(count, done),
       setHover: (on) => coreRef.current?.setHover(on),
       setPressed: (on) => coreRef.current?.setPressed(on),
       drag: (dx, dy) => coreRef.current?.drag(dx, dy),
       pulse: () => coreRef.current?.pulse(),
+      center: () => coreRef.current?.center() ?? { x: 0, y: 0, r: 0 },
+      ringPoint: (index, unit) => coreRef.current?.ringPoint(index, unit) ?? { x: 0, y: 0, front: true },
       bindSlot: (element) => {
         slotRef.current = element;
       },
@@ -68,7 +82,13 @@ export function CoreProvider({
     let core: AuraCore3D;
     try {
       if (!AuraCore3D.supported()) throw new Error('no webgl2');
-      core = new AuraCore3D(canvas, { particles: 3600, dust: 520, quality: 'auto' });
+      const home = pageRef.current === 'home';
+      core = new AuraCore3D(canvas, {
+        particles: 3600,
+        dust: 520,
+        quality: home ? 'high' : qualityRef.current,
+        fps: home ? 60 : 0,
+      });
       document.body.classList.remove('no-webgl');
     } catch {
       document.body.classList.add('no-webgl');
@@ -141,8 +161,10 @@ export function CoreProvider({
     if (!core) return;
     core.reduced = reduced;
     if (core.dust) core.dust.visible = dust;
-    core.setQuality(quality);
-  }, [reduced, dust, quality]);
+    const home = page === 'home';
+    core.setQuality(home ? 'high' : quality);
+    core.setFps(home ? 60 : 0);
+  }, [reduced, dust, quality, page]);
 
   return (
     <CoreContext.Provider value={apiRef.current}>

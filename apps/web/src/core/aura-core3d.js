@@ -558,6 +558,11 @@ export class AuraCore3D {
     const next = q === 'low' ? 'low' : 'high';
     if (next !== this.quality) { this.quality = next; this._setupComposer(); this.resize(); }
   }
+  /** Cap the render loop. 0 follows the display refresh rate. */
+  setFps(fps) {
+    this.opts.fps = fps > 0 ? fps : 0;
+    this._lastT = 0;
+  }
   compile() { const t = performance.now(); this.renderer.compile(this.scene, this.camera); return performance.now() - t; }
   onFrame(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
 

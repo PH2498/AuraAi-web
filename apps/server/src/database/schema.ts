@@ -78,6 +78,62 @@ export const providerConfigs = pgTable(
   (table) => [uniqueIndex('provider_configs_user_provider_idx').on(table.userId, table.provider)],
 );
 
+export const notes = pgTable(
+  'notes',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('notes_user_id_idx').on(table.userId)],
+);
+
+export const agentTasks = pgTable(
+  'agent_tasks',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    goal: text('goal').notNull(),
+    status: text('status').notNull(),
+    summary: text('summary'),
+    plan: jsonb('plan').$type<{ tool: string; input: Record<string, unknown> }[] | null>(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (table) => [index('agent_tasks_user_id_idx').on(table.userId)],
+);
+
+export const agentSteps = pgTable(
+  'agent_steps',
+  {
+    id: uuid('id').primaryKey(),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => agentTasks.id, { onDelete: 'cascade' }),
+    sequence: integer('sequence').notNull(),
+    toolName: text('tool_name'),
+    title: text('title').notNull(),
+    status: text('status').notNull(),
+    riskLevel: text('risk_level'),
+    confirmationStatus: text('confirmation_status'),
+    input: jsonb('input').$type<Record<string, unknown> | null>(),
+    inputHash: text('input_hash'),
+    result: jsonb('result').$type<Record<string, unknown> | null>(),
+    summary: text('summary'),
+    confirmExpiresAt: timestamp('confirm_expires_at', { withTimezone: true }),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+  },
+  (table) => [index('agent_steps_task_id_idx').on(table.taskId)],
+);
+
 export const auditLogs = pgTable(
   'audit_logs',
   {

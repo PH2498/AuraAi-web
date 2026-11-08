@@ -13,8 +13,8 @@ import { createWebPlatform, PlatformCapabilityError } from '@aura/platform';
 import { ConfirmDialog, type ConfirmOptions } from '../components/confirm-dialog';
 import { LoginDialog } from '../components/login-dialog';
 import { currentAccount, loginAccount, logoutAccount, refreshOllama, type Account } from '../chat/api';
-import { TASKS } from '../fixtures/content';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
+import { listTasks } from '../tasks/api';
 
 const platform = createWebPlatform();
 
@@ -40,6 +40,7 @@ type Session = {
   ollamaReady: boolean;
   ollamaModels: string[];
   account: Account | null;
+  accountKnown: boolean;
   requireAccount: () => Promise<boolean>;
   logout: () => Promise<void>;
   probeOllama: (url: string) => Promise<string>;
@@ -87,6 +88,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [account, setAccount] = useState<Account | null>(null);
+  const [accountKnown, setAccountKnown] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginError, setLoginError] = useState('');
   const loginWait = useRef<((ok: boolean) => void) | null>(null);
@@ -120,7 +122,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
-    void currentAccount().then(setAccount);
+    void currentAccount()
+      .then(setAccount)
+      .finally(() => setAccountKnown(true));
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
@@ -307,7 +311,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     toast('这条演示已关闭。没有发送邮件，也没有移动文件。');
   }, [toast]);
 
-  const pending = TASKS.filter((task) => task.status === 'wait' && !dismissed.includes(task.id)).length;
+  const [taskPending, setTaskPending] = useState(0);
+  useEffect(() => {
+    if (!accountKnown) return;
+    if (!account) {
+      setTaskPending(0);
+      return;
+    }
+    let stop = false;
+    const pull = () => {
+      void listTasks()
+        .then((tasks) => {
+          if (!stop) setTaskPending(tasks.filter((task) => task.status === 'waiting_confirmation').length);
+        })
+        .catch(() => undefined);
+    };
+    pull();
+    const timer = window.setInterval(pull, 5000);
+    return () => {
+      stop = true;
+      window.clearInterval(timer);
+    };
+  }, [account, accountKnown]);
+  const pending = taskPending;
   const sensing = {
     mic: Boolean(streams.mic),
     cam: Boolean(streams.cam),
@@ -328,6 +354,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       ollamaReady,
       ollamaModels,
       account,
+      accountKnown,
       requireAccount,
       logout,
       probeOllama,
@@ -359,6 +386,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       ollamaReady,
       ollamaModels,
       account,
+      accountKnown,
       requireAccount,
       logout,
       probeOllama,
