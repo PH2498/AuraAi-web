@@ -34,12 +34,27 @@ export type WebSettings = {
   motion: 'system' | 'full' | 'reduce';
   quality: 'auto' | 'high' | 'low';
   dust: boolean;
+  openOn: 'home' | 'conversations' | 'vision';
   runMode: RunMode;
   model: ModelId;
+  visionModel: ModelId;
   ollamaUrl: string;
+  stt: 'browser' | 'whisper';
+  autoRead: boolean;
+  rate: number;
+  voice: string;
+  micDevice: string;
+  camDevice: string;
+  interval: '2' | '5' | '10' | '30';
+  sensitivity: number;
+  keepShots: 'session' | 'day';
   uploadAsk: 'ask' | 'always' | 'never';
   memoryAuto: boolean;
   retention: '30' | '90' | '365' | 'keep';
+  gpu: 'auto' | 'high' | 'low';
+  ctx: '4096' | '8192' | '16384' | '32768';
+  keepAlive: '0' | '5m' | '30m' | '-1';
+  autostart: boolean;
 };
 
 const KEY = 'aura-web-settings';
@@ -49,12 +64,27 @@ export const DEFAULT_SETTINGS: WebSettings = {
   motion: 'system',
   quality: 'auto',
   dust: true,
+  openOn: 'home',
   runMode: 'local-first',
   model: 'local',
+  visionModel: 'local',
   ollamaUrl: 'http://127.0.0.1:11434',
+  stt: 'browser',
+  autoRead: false,
+  rate: 1.05,
+  voice: '',
+  micDevice: '',
+  camDevice: '',
+  interval: '5',
+  sensitivity: 12,
+  keepShots: 'session',
   uploadAsk: 'ask',
   memoryAuto: true,
   retention: '90',
+  gpu: 'auto',
+  ctx: '8192',
+  keepAlive: '5m',
+  autostart: true,
 };
 
 export function loadSettings(): WebSettings {

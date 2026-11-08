@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../../app/session';
-import { motionReduced, resolvedOs } from '../../state/settings';
+import { resolvedOs } from '../../state/settings';
 import { CoreProvider } from '../aura-core/CoreProvider';
 import { Icon, WordmarkGlyph } from '../icon';
 
@@ -25,11 +25,27 @@ function pageOf(pathname: string): (typeof NAV)[number]['page'] | 'settings' {
 export function AppShell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { settings, aura, sensing, stopSensing, toggleSensor, pending, ollamaReady, levelRef, drawerOpen, setDrawerOpen } =
-    useSession();
+  const {
+    settings,
+    aura,
+    sensing,
+    stopSensing,
+    toggleSensor,
+    pending,
+    ollamaReady,
+    levelRef,
+    drawerOpen,
+    setDrawerOpen,
+    conversation,
+    indexExpanded,
+    toggleConversationIndex,
+    closeConversationPopovers,
+    toast,
+  } = useSession();
   const page = pageOf(location.pathname);
   const os = resolvedOs(settings);
-  const reduced = motionReduced(settings);
+  const [systemReduced, setSystemReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const reduced = settings.motion === 'reduce' || (settings.motion !== 'full' && systemReduced);
   const connected = ollamaReady && settings.model === 'local';
   const [indicator, setIndicator] = useState({ x: 0, width: 0, visible: page !== 'settings' });
   const sensingOn = sensing.mic || sensing.cam || sensing.screen;
@@ -48,13 +64,51 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [page, os, aura, sensingOn, reduced]);
 
   useEffect(() => {
-    const current = document.querySelector<HTMLElement>(`#nav a[data-page="${page}"]`);
-    if (!current) {
-      setIndicator((value) => ({ ...value, visible: false }));
-      return;
-    }
-    setIndicator({ x: current.offsetLeft, width: current.offsetWidth, visible: true });
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setSystemReduced(media.matches);
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  useEffect(() => {
+    const place = () => {
+      const current = document.querySelector<HTMLElement>(`#nav a[data-page="${page}"]`);
+      if (!current) {
+        setIndicator((value) => ({ ...value, visible: false }));
+        return;
+      }
+      setIndicator({ x: current.offsetLeft, width: current.offsetWidth, visible: true });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
   }, [page, location.pathname]);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as Element | null)?.closest('a[href]');
+      if (!(anchor instanceof HTMLAnchorElement) || anchor.target || anchor.hasAttribute('download')) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || /^(https?:|mailto:|tel:)/.test(href)) return;
+      const url = new URL(anchor.href);
+      if (url.origin !== window.location.origin) return;
+      const next = `${url.pathname}${url.search}${url.hash}`;
+      const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const section = (pathname: string) => pathname.split('/').filter(Boolean)[0] ?? '';
+      if (next === here || section(url.pathname) === section(window.location.pathname) || document.body.classList.contains('leaving')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      document.body.classList.add('leaving');
+      const wait = document.documentElement.classList.contains('reduce-motion') ? 0 : 220;
+      window.setTimeout(() => {
+        document.body.classList.remove('leaving');
+        navigate(next);
+      }, wait);
+    };
+    document.addEventListener('click', onClick, true);
+    return () => document.removeEventListener('click', onClick, true);
+  }, [navigate]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -81,11 +135,16 @@ export function AppShell({ children }: { children: ReactNode }) {
       if (event.key.toLowerCase() === 'j') {
         event.preventDefault();
         if (page === 'home') setDrawerOpen(!drawerOpen);
+        else if (page === 'conversations') toggleConversationIndex();
         else navigate('/conversations');
       }
       if (event.key.toLowerCase() === 'n') {
         event.preventDefault();
-        navigate('/conversations/new');
+        if (page === 'home' && document.body.classList.contains('reading')) {
+          document.dispatchEvent(new Event('aura-new-chat'));
+        } else {
+          navigate('/conversations/new');
+        }
       }
     };
     const onAlt = (event: KeyboardEvent) => {
@@ -93,7 +152,23 @@ export function AppShell({ children }: { children: ReactNode }) {
         event.preventDefault();
         void toggleSensor('mic');
       }
-      if (event.key === 'Escape') stopSensing();
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (document.querySelector('.scrim.open, .menu.open')) return;
+      if (page === 'home' && drawerOpen) {
+        event.preventDefault();
+        setDrawerOpen(false);
+        return;
+      }
+      if (page === 'conversations' && (conversation.indexOpen || conversation.contextOpen)) {
+        event.preventDefault();
+        closeConversationPopovers();
+        return;
+      }
+      if (sensing.mic || sensing.cam || sensing.screen) {
+        event.preventDefault();
+        stopSensing();
+        toast('已停止全部感知');
+      }
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keydown', onAlt);
@@ -101,27 +176,44 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keydown', onAlt);
     };
-  }, [navigate, stopSensing, toggleSensor, page, drawerOpen, setDrawerOpen]);
+  }, [
+    navigate,
+    stopSensing,
+    toggleSensor,
+    page,
+    drawerOpen,
+    setDrawerOpen,
+    conversation.indexOpen,
+    conversation.contextOpen,
+    toggleConversationIndex,
+    closeConversationPopovers,
+    sensing.mic,
+    sensing.cam,
+    sensing.screen,
+    toast,
+  ]);
 
   return (
-    <CoreProvider state={aura} reduced={reduced} dust={settings.dust} levelRef={levelRef}>
+    <CoreProvider
+      state={aura}
+      reduced={reduced}
+      dust={settings.dust}
+      quality={settings.quality}
+      levelRef={levelRef}
+      onFallback={() => toast('图形渲染已暂停，已切换到兼容模式')}
+    >
       <header className="titlebar">
         <div className="tb-left">
-          <div className="traffic" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-          {page === 'home' ? (
+          {page === 'home' || page === 'conversations' ? (
             <button
               type="button"
               className="icon-btn icon-btn-sm"
               aria-label="会话列表"
-              aria-expanded={drawerOpen}
-              aria-controls="drawer"
-              data-tip="会话 ⌘J"
+              aria-expanded={page === 'home' ? drawerOpen : indexExpanded}
+              aria-controls={page === 'home' ? 'drawer' : 'conversation-index'}
+              data-tip={page === 'home' ? '会话 ⌘J' : '会话列表 ⌘J'}
               data-tip-pos="bottom"
-              onClick={() => setDrawerOpen(!drawerOpen)}
+              onClick={() => (page === 'home' ? setDrawerOpen(!drawerOpen) : toggleConversationIndex())}
             >
               <Icon name="panel-left" />
             </button>
@@ -179,7 +271,14 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span className="dot" />
               屏幕
             </span>
-            <button type="button" className="btn btn-sm btn-secondary" onClick={stopSensing}>
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => {
+                stopSensing();
+                toast('已停止全部感知');
+              }}
+            >
               <Icon name="power" className="i i-14" />
               全部停止
             </button>

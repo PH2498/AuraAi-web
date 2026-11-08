@@ -26,13 +26,17 @@ export function CoreProvider({
   state,
   reduced,
   dust,
+  quality,
   levelRef,
+  onFallback,
   children,
 }: {
   state: AuraState;
   reduced: boolean;
   dust: boolean;
+  quality: 'auto' | 'high' | 'low';
   levelRef?: RefObject<number>;
+  onFallback?: () => void;
   children: ReactNode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -41,6 +45,9 @@ export function CoreProvider({
   const apiRef = useRef<CoreApi>(null!);
   const levelHolder = useRef(levelRef);
   levelHolder.current = levelRef;
+  const fallbackRef = useRef(onFallback);
+  fallbackRef.current = onFallback;
+  const reportedFallback = useRef(false);
   if (!apiRef.current) {
     apiRef.current = {
       setState: (next) => coreRef.current?.setState(next),
@@ -65,6 +72,10 @@ export function CoreProvider({
       document.body.classList.remove('no-webgl');
     } catch {
       document.body.classList.add('no-webgl');
+      if (!reportedFallback.current) {
+        reportedFallback.current = true;
+        fallbackRef.current?.();
+      }
       return;
     }
     coreRef.current = core;
@@ -72,6 +83,10 @@ export function CoreProvider({
     const stop = core.onFrame((event) => {
       if (event?.lost) {
         document.body.classList.add('no-webgl');
+        if (!reportedFallback.current) {
+          reportedFallback.current = true;
+          fallbackRef.current?.();
+        }
         return;
       }
       const slot = slotRef.current;
@@ -126,7 +141,8 @@ export function CoreProvider({
     if (!core) return;
     core.reduced = reduced;
     if (core.dust) core.dust.visible = dust;
-  }, [reduced, dust]);
+    core.setQuality(quality);
+  }, [reduced, dust, quality]);
 
   return (
     <CoreContext.Provider value={apiRef.current}>

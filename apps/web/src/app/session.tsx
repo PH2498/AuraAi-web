@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -9,6 +10,7 @@ import {
   type RefObject,
 } from 'react';
 import { createWebPlatform, PlatformCapabilityError } from '@aura/platform';
+import { ConfirmDialog, type ConfirmOptions } from '../components/confirm-dialog';
 import { TASKS } from '../fixtures/content';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
 
@@ -17,7 +19,11 @@ const platform = createWebPlatform();
 type Sensor = 'mic' | 'cam' | 'screen';
 type Streams = Record<Sensor, MediaStream | null>;
 
-type ToastItem = { id: number; text: string };
+type SensorResult = { ok: true; active: boolean } | { ok: false; message: string };
+
+type ToastAction = { label: string; run: () => void };
+type ToastItem = { id: number; text: string; icon: string; action?: ToastAction };
+type DialogRequest = ConfirmOptions & { key: number };
 
 type Session = {
   settings: WebSettings;
@@ -27,18 +33,32 @@ type Session = {
   streams: Streams;
   sensing: Record<Sensor, boolean>;
   levelRef: RefObject<number>;
-  toggleSensor: (kind: Sensor) => Promise<void>;
+  toggleSensor: (kind: Sensor) => Promise<SensorResult>;
   stopSensing: () => void;
   ollamaReady: boolean;
+  ollamaModels: string[];
   probeOllama: (url: string) => Promise<string>;
   pending: number;
   dismissed: string[];
   dismissTask: (id: string) => void;
   drawerOpen: boolean;
   setDrawerOpen: (open: boolean) => void;
+  conversation: {
+    indexOpen: boolean;
+    collapsed: boolean;
+    contextOpen: boolean;
+    contextHidden: boolean;
+  };
+  indexExpanded: boolean;
+  contextExpanded: boolean;
+  toggleConversationIndex: () => void;
+  toggleConversationContext: () => void;
+  closeConversationPopovers: () => void;
   toasts: ToastItem[];
-  toast: (text: string) => void;
+  toast: (text: string, options?: { icon?: string; action?: ToastAction }) => void;
   dismissToast: (id: number) => void;
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
+  dialog: DialogRequest | null;
 };
 
 const SessionContext = createContext<Session | null>(null);
@@ -50,17 +70,48 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [aura, setAura] = useState<AuraState>('idle');
   const [streams, setStreams] = useState<Streams>(EMPTY_STREAMS);
   const [ollamaReady, setOllamaReady] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [conversation, setConversation] = useState({
+    indexOpen: false,
+    collapsed: false,
+    contextOpen: false,
+    contextHidden: false,
+  });
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [dialog, setDialog] = useState<DialogRequest | null>(null);
+  const dialogKey = useRef(0);
+  const dialogResult = useRef<((ok: boolean) => void) | null>(null);
   const levelRef = useRef(0);
   const audioRef = useRef<{ context: AudioContext; frame: number } | null>(null);
   const toastId = useRef(0);
 
-  const toast = useCallback((text: string) => {
+  const toast = useCallback((text: string, options?: { icon?: string; action?: ToastAction }) => {
     const id = ++toastId.current;
-    setToasts((items) => [...items, { id, text }]);
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3200);
+    setToasts((items) => [...items, { id, text, icon: options?.icon ?? 'circle-check', action: options?.action }]);
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), options?.action ? 5200 : 2800);
+  }, []);
+
+  const confirm = useCallback((options: ConfirmOptions) => {
+    dialogResult.current?.(false);
+    return new Promise<boolean>((resolve) => {
+      dialogResult.current = resolve;
+      setDialog({ ...options, key: ++dialogKey.current });
+    });
+  }, []);
+
+  const finishDialog = useCallback((ok: boolean) => {
+    dialogResult.current?.(ok);
+    dialogResult.current = null;
+    setDialog(null);
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const updateSettings = useCallback((patch: Partial<WebSettings>) => {
@@ -104,11 +155,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [stopAudio]);
 
   const toggleSensor = useCallback(
-    async (kind: Sensor) => {
+    async (kind: Sensor): Promise<SensorResult> => {
       if (streams[kind]) {
         stopKind(kind);
         if (kind === 'mic') setAura('idle');
-        return;
+        return { ok: true, active: false };
       }
       try {
         const stream =
@@ -148,25 +199,56 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setAura('vision');
           toast(kind === 'cam' ? '摄像头已开启。模型未接入，不会分析画面。' : '屏幕已共享。模型未接入，不会分析画面。');
         }
+        return { ok: true, active: true };
       } catch (error) {
-        setAura('error');
-        toast(error instanceof PlatformCapabilityError ? error.message : '无法打开这一路感知');
+        setAura('idle');
+        const message = error instanceof PlatformCapabilityError ? error.message : '无法打开这一路感知';
+        toast(message);
+        return { ok: false, message };
       }
     },
     [stopKind, streams, toast],
   );
+
+  const toggleConversationIndex = useCallback(() => {
+    setConversation((current) =>
+      window.innerWidth < 1120
+        ? { ...current, indexOpen: !current.indexOpen }
+        : { ...current, collapsed: !current.collapsed },
+    );
+  }, []);
+
+  const toggleConversationContext = useCallback(() => {
+    setConversation((current) =>
+      window.innerWidth < 1440
+        ? { ...current, contextOpen: !current.contextOpen }
+        : { ...current, contextHidden: !current.contextHidden },
+    );
+  }, []);
+
+  const closeConversationPopovers = useCallback(() => {
+    setConversation((current) => ({ ...current, indexOpen: false, contextOpen: false }));
+  }, []);
+
+  const indexExpanded = viewportWidth < 1120 ? conversation.indexOpen : !conversation.collapsed;
+  const contextExpanded = viewportWidth < 1440 ? conversation.contextOpen : !conversation.contextHidden;
 
   const probeOllama = useCallback(async (url: string) => {
     try {
       const response = await fetch(new URL('/api/tags', url), { signal: AbortSignal.timeout(4000) });
       if (!response.ok) {
         setOllamaReady(false);
+        setOllamaModels([]);
         return `没有连上，服务返回 ${response.status}。`;
       }
+      const body = (await response.json()) as { models?: { name?: string }[] };
+      const names = (body.models ?? []).map((item) => item.name).filter((name): name is string => Boolean(name));
+      setOllamaModels(names);
       setOllamaReady(true);
-      return '已连接。这次探测成功。';
+      return names.length ? `已连接。这次探测成功，列出 ${names.length} 个模型。` : '已连接。这次探测成功，但没有列出模型。';
     } catch {
       setOllamaReady(false);
+      setOllamaModels([]);
       return '没有连上。请确认 Ollama 已启动，并且地址允许网页访问。';
     }
   }, []);
@@ -195,15 +277,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       toggleSensor,
       stopSensing,
       ollamaReady,
+      ollamaModels,
       probeOllama,
       pending,
       dismissed,
       dismissTask,
       drawerOpen,
       setDrawerOpen,
+      conversation,
+      indexExpanded,
+      contextExpanded,
+      toggleConversationIndex,
+      toggleConversationContext,
+      closeConversationPopovers,
       toasts,
       toast,
       dismissToast: (id) => setToasts((items) => items.filter((item) => item.id !== id)),
+      confirm,
+      dialog,
     }),
     [
       settings,
@@ -214,17 +305,31 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       toggleSensor,
       stopSensing,
       ollamaReady,
+      ollamaModels,
       probeOllama,
       pending,
       dismissed,
       dismissTask,
       drawerOpen,
+      conversation,
+      indexExpanded,
+      contextExpanded,
+      toggleConversationIndex,
+      toggleConversationContext,
+      closeConversationPopovers,
       toasts,
       toast,
+      confirm,
+      dialog,
     ],
   );
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>
+      {children}
+      {dialog ? <ConfirmDialog key={dialog.key} request={dialog} onDone={finishDialog} /> : null}
+    </SessionContext.Provider>
+  );
 }
 
 export function useSession(): Session {
