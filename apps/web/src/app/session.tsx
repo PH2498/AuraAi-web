@@ -11,6 +11,8 @@ import {
 } from 'react';
 import { createWebPlatform, PlatformCapabilityError } from '@aura/platform';
 import { ConfirmDialog, type ConfirmOptions } from '../components/confirm-dialog';
+import { LoginDialog } from '../components/login-dialog';
+import { currentAccount, loginAccount, logoutAccount, refreshOllama, type Account } from '../chat/api';
 import { TASKS } from '../fixtures/content';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
 
@@ -37,6 +39,9 @@ type Session = {
   stopSensing: () => void;
   ollamaReady: boolean;
   ollamaModels: string[];
+  account: Account | null;
+  requireAccount: () => Promise<boolean>;
+  logout: () => Promise<void>;
   probeOllama: (url: string) => Promise<string>;
   pending: number;
   dismissed: string[];
@@ -81,6 +86,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   });
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const loginWait = useRef<((ok: boolean) => void) | null>(null);
   const [dialog, setDialog] = useState<DialogRequest | null>(null);
   const dialogKey = useRef(0);
   const dialogResult = useRef<((ok: boolean) => void) | null>(null);
@@ -111,7 +120,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
+    void currentAccount().then(setAccount);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const requireAccount = useCallback(() => {
+    if (account) return Promise.resolve(true);
+    setLoginError('');
+    setLoginOpen(true);
+    return new Promise<boolean>((resolve) => {
+      loginWait.current = resolve;
+    });
+  }, [account]);
+
+  const finishLogin = useCallback((ok: boolean) => {
+    setLoginOpen(false);
+    loginWait.current?.(ok);
+    loginWait.current = null;
   }, []);
 
   const updateSettings = useCallback((patch: Partial<WebSettings>) => {
@@ -234,6 +259,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const contextExpanded = viewportWidth < 1440 ? conversation.contextOpen : !conversation.contextHidden;
 
   const probeOllama = useCallback(async (url: string) => {
+    if (account) {
+      try {
+        const result = await refreshOllama(url, 'qwen2.5:7b');
+        setOllamaReady(result.ok);
+        setOllamaModels(result.models);
+        return result.message;
+      } catch (error) {
+        setOllamaReady(false);
+        setOllamaModels([]);
+        return error instanceof Error ? error.message : '没有连上 Ollama';
+      }
+    }
     try {
       const response = await fetch(new URL('/api/tags', url), { signal: AbortSignal.timeout(4000) });
       if (!response.ok) {
@@ -251,6 +288,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setOllamaModels([]);
       return '没有连上。请确认 Ollama 已启动，并且地址允许网页访问。';
     }
+  }, [account]);
+
+  useEffect(() => {
+    if (!account) return;
+    void probeOllama(settings.ollamaUrl);
+  }, [account, settings.ollamaUrl, probeOllama]);
+
+  const logout = useCallback(async () => {
+    await logoutAccount();
+    setAccount(null);
+    setOllamaReady(false);
+    setOllamaModels([]);
   }, []);
 
   const dismissTask = useCallback((id: string) => {
@@ -278,6 +327,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stopSensing,
       ollamaReady,
       ollamaModels,
+      account,
+      requireAccount,
+      logout,
       probeOllama,
       pending,
       dismissed,
@@ -306,6 +358,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stopSensing,
       ollamaReady,
       ollamaModels,
+      account,
+      requireAccount,
+      logout,
       probeOllama,
       pending,
       dismissed,
@@ -328,6 +383,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     <SessionContext.Provider value={value}>
       {children}
       {dialog ? <ConfirmDialog key={dialog.key} request={dialog} onDone={finishDialog} /> : null}
+      {loginOpen ? (
+        <LoginDialog
+          error={loginError}
+          onClose={() => finishLogin(false)}
+          onSubmit={(email, password) => {
+            void loginAccount(email, password).then(
+              (user) => {
+                setAccount(user);
+                setLoginError('');
+                finishLogin(true);
+              },
+              (error: unknown) => setLoginError(error instanceof Error ? error.message : '邮箱或密码不正确'),
+            );
+          }}
+        />
+      ) : null}
     </SessionContext.Provider>
   );
 }

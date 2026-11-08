@@ -290,6 +290,8 @@ a { color: inherit; text-decoration: none; }
   background: transparent; border: 0; outline: 0; padding: 0;
   font-size: var(--fs-body-lg); line-height: 1.6; color: var(--fg);
 }
+.cmd-input:focus,
+.cmd-input:focus-visible { outline: none; box-shadow: none; }
 .cmd-input::placeholder { color: var(--muted); }
 .cmd-transcript { display: none; min-height: 26px; font-size: var(--fs-body-lg); line-height: 1.6; color: var(--fg); }
 .cmd-transcript .interim { color: var(--muted); }
@@ -374,9 +376,14 @@ a { color: inherit; text-decoration: none; }
 .menu-item:hover, .menu-item:focus-visible { background: var(--hover); box-shadow: none; }
 .menu-item:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .menu-item .sub { display: block; font-size: 12px; color: var(--muted); }
-.menu-item .tail { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.menu-item .tail { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; flex: none; }
 .menu-item .check { visibility: hidden; color: var(--fg); }
 .menu-item[aria-checked="true"] .check { visibility: visible; }
+.menu-item:disabled { opacity: .5; }
+.menu .pill { height: 20px; padding: 0 8px; font-size: 11px; }
+.cmd-models { bottom: calc(100% + 10px); width: 372px; max-width: calc(100% - 16px); }
+.cmd-models .menu-item > span:first-of-type { flex: 1; min-width: 0; }
+.cmd-models .sub { white-space: nowrap; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: 6px 4px; }
 
 .scrim {

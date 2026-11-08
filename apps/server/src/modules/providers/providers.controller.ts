@@ -22,6 +22,12 @@ export class ProvidersController {
     return this.providers.create(this.userId(request), body);
   }
 
+  @Post(':id/test')
+  @ApiOperation({ summary: '测试提供方连接。响应不含密钥' })
+  test(@Req() request: AuthedRequest, @Param('id') id: string) {
+    return this.providers.test(this.userId(request), id);
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: '更新提供方配置' })
   update(@Req() request: AuthedRequest, @Param('id') id: string, @Body() body: unknown) {

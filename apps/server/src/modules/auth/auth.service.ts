@@ -36,6 +36,11 @@ export class AuthService implements OnModuleInit {
     const existing = await this.database.db.select({ id: users.id }).from(users).limit(1);
     if (existing.length > 0) return;
     if (password.length < 8) return;
+    const parsed = LoginSchema.safeParse({ email, password });
+    if (!parsed.success) {
+      console.error('引导账号无效，已跳过创建。');
+      return;
+    }
     await this.createUser(email, password);
   }
 

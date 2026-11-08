@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
+import { listProviders } from '../../chat/api';
 import { MODELS, type ModelId } from '../../state/settings';
 import { Icon } from '../icon';
 
@@ -7,20 +9,25 @@ export function CommandBar({
   value,
   onChange,
   onSubmit,
+  onStop,
   busy,
   placeholder = '让 AURA 帮你做点什么…',
 }: {
   value: string;
   onChange: (value: string) => void;
   onSubmit: (files: string[]) => void;
+  onStop?: () => void;
   busy?: boolean;
   placeholder?: string;
 }) {
-  const { settings, updateSettings, ollamaReady, sensing, streams, toggleSensor } = useSession();
+  const { settings, updateSettings, ollamaReady, account, sensing, streams, toggleSensor } = useSession();
   const [open, setOpen] = useState(false);
+  const [openaiReady, setOpenaiReady] = useState(false);
   const [finder, setFinder] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const box = useRef<HTMLDivElement>(null);
+  const modelBtn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const current = MODELS[settings.model];
   const listening = sensing.mic;
@@ -49,11 +56,77 @@ export function CommandBar({
   }, [open, finder]);
 
   useEffect(() => {
+    if (!open) return;
+    const host = box.current;
+    const trigger = modelBtn.current;
+    const panel = menu.current;
+    if (!host || !trigger || !panel) return;
+    const width = Math.min(372, host.clientWidth - 16);
+    const maxLeft = Math.max(8, host.clientWidth - width - 8);
+    panel.style.width = `${width}px`;
+    panel.style.left = `${Math.max(8, Math.min(trigger.offsetLeft, maxLeft))}px`;
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !account) {
+      setOpenaiReady(false);
+      return;
+    }
+    let cancelled = false;
+    void listProviders()
+      .then((rows) => {
+        if (!cancelled) setOpenaiReady(Boolean(rows.find((item) => item.provider === 'openai')?.keyConfigured));
+      })
+      .catch(() => {
+        if (!cancelled) setOpenaiReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, account]);
+
+  useEffect(() => {
     const node = video.current;
     if (!node) return;
     node.srcObject = finder ? streams.cam : null;
     if (finder && streams.cam) void node.play().catch(() => undefined);
   }, [finder, streams.cam]);
+
+  const modelItem = (id: ModelId) => {
+    const item = MODELS[id];
+    const blocked = item.cloud && settings.runMode === 'local-only';
+    const connected = id === 'local' && ollamaReady;
+    const label = blocked ? '仅本地模式' : connected ? '已连接' : id === 'gpt' && openaiReady ? '已保存密钥' : item.cloud ? '未配置 Key' : '未连通';
+    return (
+      <button
+        key={id}
+        type="button"
+        className="menu-item"
+        role="menuitemradio"
+        aria-checked={settings.model === id}
+        disabled={blocked}
+        onClick={() => {
+          updateSettings({ model: id });
+          setOpen(false);
+        }}
+      >
+        <Icon name={item.icon} />
+        <span>
+          {item.name}
+          <span className="sub">
+            {item.provider} · {item.caps.join(' / ')}
+          </span>
+        </span>
+        <span className="tail">
+          <span className={`pill${connected ? ' ok' : blocked ? '' : ' warn'}`}>
+            {blocked ? null : <span className="dot" />}
+            {label}
+          </span>
+          <Icon name="check" className="i check" />
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div
@@ -136,7 +209,7 @@ export function CommandBar({
           <Icon name="camera" className="i i-18" />
         </button>
         <span className="sep" aria-hidden="true" />
-        <button type="button" className="model-btn" aria-haspopup="menu" aria-expanded={open} aria-controls="modelMenu" onClick={() => setOpen((v) => !v)}>
+        <button ref={modelBtn} type="button" className="model-btn" aria-haspopup="menu" aria-expanded={open} aria-controls="modelMenu" onClick={() => setOpen((v) => !v)}>
           <Icon name={current.icon} />
           <span>{current.name}</span>
           <span className="where">{current.where}</span>
@@ -159,46 +232,24 @@ export function CommandBar({
         <button
           type="button"
           className="send-btn"
-          aria-label="发送"
-          disabled={!value.trim() || busy}
-          onClick={() => onSubmit(files)}
+          aria-label={busy ? '停止生成' : '发送'}
+          disabled={!busy && !value.trim()}
+          onClick={() => (busy ? onStop?.() : onSubmit(files))}
         >
-          <Icon name="arrow-up" className="i i-18" />
+          <Icon name={busy ? 'square' : 'arrow-up'} className="i i-18" />
         </button>
       </div>
-      <div className={`menu${open ? ' open' : ''}`} id="modelMenu" role="menu" aria-label="选择模型" style={{ bottom: 'calc(100% + 10px)', left: 0, width: 320 }}>
-        {(Object.keys(MODELS) as ModelId[]).map((id) => {
-          const item = MODELS[id];
-          const blocked = item.cloud && settings.runMode === 'local-only';
-          const ready = id === 'local' && ollamaReady;
-          const label = blocked ? '仅本地模式' : ready ? '已连接' : item.cloud ? '未配置 Key' : '未配置';
-          return (
-            <button
-              key={id}
-              type="button"
-              className="menu-item"
-              role="menuitemradio"
-              aria-checked={settings.model === id}
-              disabled={blocked}
-              onClick={() => {
-                updateSettings({ model: id });
-                setOpen(false);
-              }}
-            >
-              <Icon name={item.icon} />
-              <span>
-                <b>{item.name}</b>
-                <span className="sub">
-                  {item.provider} · {item.where}
-                </span>
-              </span>
-              <span className={`pill${ready ? ' ok' : ' warn'}`}>
-                <span className="dot" />
-                {label}
-              </span>
-            </button>
-          );
-        })}
+      <div ref={menu} className={`menu cmd-models${open ? ' open' : ''}`} id="modelMenu" role="menu" aria-label="选择模型" style={{ ['--origin' as string]: 'bottom left' }}>
+        <div className="menu-label">本地 · 不上传</div>
+        {modelItem('local')}
+        <div className="menu-label">云端</div>
+        {modelItem('gpt')}
+        {modelItem('claude')}
+        <hr />
+        <Link className="menu-item" role="menuitem" to="/settings/models" onClick={() => setOpen(false)}>
+          <Icon name="settings" />
+          <span>管理模型与 Provider…</span>
+        </Link>
       </div>
       <div className={`menu viewfinder${finder ? ' open' : ''}`} role="dialog" aria-label="摄像头画面">
         <div className="vf-wrap">

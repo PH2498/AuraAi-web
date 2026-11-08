@@ -3,8 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../app/session';
 import { useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
+import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { CONVERSATIONS } from '../fixtures/content';
+import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type ServerMessage } from '../chat/api';
 
 const FRESH_SUGGESTIONS: [string, string][] = [
   ['monitor', '总结我屏幕上的内容'],
@@ -14,20 +16,19 @@ const FRESH_SUGGESTIONS: [string, string][] = [
 
 type Thread = Omit<(typeof CONVERSATIONS)[number], 'id'> & { id: string; pinned: boolean };
 
-const DEMO_ANSWER = [
-  '这是演示回复。模型还没有接入，这条内容没有发给任何服务。',
-  '桌面端、屏幕和日历都还没接上，所以这里不会真的执行。',
-];
-
 export function ConversationsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast } = useSession();
+  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast, account, requireAccount, settings, ollamaModels, setAura } = useSession();
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [note, setNote] = useState('');
   const [overlay, setOverlay] = useState<Record<string, { title?: string; pinned?: boolean; hidden?: boolean }>>({});
   const [locals, setLocals] = useState<Thread[]>([]);
+  const [remote, setRemote] = useState<Thread[]>([]);
+  const [history, setHistory] = useState<ServerMessage[]>([]);
+  const [busy, setBusy] = useState(false);
+  const stopRef = useRef<AbortController | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -40,17 +41,70 @@ export function ConversationsPage() {
       title: overlay[item.id]?.title ?? item.title,
       pinned: overlay[item.id]?.pinned ?? false,
     }));
-    return [...locals, ...fixtures].sort((a, b) => Number(b.pinned) - Number(a.pinned));
-  }, [locals, overlay]);
+    return [...remote, ...locals, ...fixtures].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  }, [locals, overlay, remote]);
 
+  const found = id && id !== 'new' ? library.find((item) => item.id === id) : undefined;
+  const pendingLive = Boolean(id && id !== 'new' && !found && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id));
   const current =
-    id === 'new' ? undefined : library.find((item) => item.id === id) ?? (id ? undefined : library[0]);
+    id === 'new'
+      ? undefined
+      : found ??
+        (pendingLive && id
+          ? {
+              id,
+              title: '新对话',
+              when: '刚刚',
+              group: '记录',
+              icon: 'messages-square',
+              excerpt: '正在生成',
+              ask: '',
+              answer: [],
+              pinned: false,
+            }
+          : id
+            ? undefined
+            : library[0]);
   const fresh = !current;
   const selectedId = current?.id;
+  const live = Boolean(current && (pendingLive || remote.some((item) => item.id === current.id)));
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return library.filter((item) => !q || `${item.title} ${item.excerpt}`.toLowerCase().includes(q));
   }, [library, query]);
+
+  useEffect(() => {
+    if (!account) {
+      setRemote([]);
+      return;
+    }
+    void listConversations()
+      .then((rows) =>
+        setRemote(
+          rows.map((item) => ({
+            id: item.id,
+            title: item.title,
+            when: new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+            group: '记录',
+            icon: 'messages-square',
+            excerpt: item.modelName ? `${item.modelName}` : '已保存的对话',
+            ask: item.title,
+            answer: [] as string[],
+            pinned: false,
+          })),
+        ),
+      )
+      .catch(() => setRemote([]));
+  }, [account, busy]);
+
+  useEffect(() => {
+    if (busy) return;
+    if (!live || !selectedId) {
+      setHistory([]);
+      return;
+    }
+    void listMessages(selectedId).then(setHistory).catch(() => setHistory([]));
+  }, [live, selectedId, busy]);
 
   useEffect(() => {
     document.body.classList.toggle('idx-open', conversation.indexOpen);
@@ -87,28 +141,108 @@ export function ConversationsPage() {
     setOverlay((items) => ({ ...items, [threadId]: { ...items[threadId], ...next } }));
   };
 
+  const reloadRemote = () => {
+    if (!account) return;
+    void listConversations()
+      .then((rows) =>
+        setRemote(
+          rows.map((item) => ({
+            id: item.id,
+            title: item.title,
+            when: new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+            group: '记录',
+            icon: 'messages-square',
+            excerpt: item.modelName ?? '已保存的对话',
+            ask: item.title,
+            answer: [] as string[],
+            pinned: false,
+          })),
+        ),
+      )
+      .catch(() => undefined);
+  };
+
   const submit = (text: string) => {
     const ask = text.trim();
-    if (!ask) return;
-    setDraft('');
-    if (fresh) {
-      const thread: Thread = {
-        id: `local-${Date.now()}`,
-        title: ask,
-        when: '刚刚',
-        group: '演示',
-        icon: 'messages-square',
-        excerpt: '演示回复。模型未接入。',
-        ask,
-        answer: DEMO_ANSWER,
-        pinned: false,
-      };
-      setLocals((items) => [thread, ...items]);
-      setNote('');
-      navigate(`/conversations/${thread.id}`);
+    if (!ask || busy) return;
+    if (!fresh && !live) {
+      setDraft('');
+      setNote('这是演示回复。模型还没有接入，这条内容没有发给任何服务。');
       return;
     }
-    setNote('这是演示回复。模型还没有接入，这条内容没有发给任何服务。');
+    void (async () => {
+      if (!(await requireAccount())) {
+        setDraft(ask);
+        return;
+      }
+      if (settings.model === 'claude') {
+        setDraft('');
+        setNote('Claude 这一阶段还没有接入。当前可以对话的是本机 Ollama。');
+        return;
+      }
+      const cloud = settings.model === 'gpt';
+      const model = cloud ? 'gpt-4o' : (ollamaModels.find((name) => name.startsWith('qwen2.5')) ?? ollamaModels[0] ?? 'qwen2.5:7b');
+      setDraft('');
+      const controller = new AbortController();
+      stopRef.current = controller;
+      setBusy(true);
+      setAura('thinking');
+      const userMessage: ServerMessage = {
+        id: `pending-${Date.now()}`,
+        role: 'user',
+        content: { text: ask },
+        sequence: history.length + 1,
+        status: 'complete',
+      };
+      const assistant: ServerMessage = {
+        id: 'pending-assistant',
+        role: 'assistant',
+        content: { text: '' },
+        sequence: history.length + 2,
+        status: 'streaming',
+      };
+      setHistory((items) => [...items.filter((item) => item.id !== 'pending-assistant'), userMessage, assistant]);
+      let answer = '';
+      let frame = 0;
+      const paint = () => {
+        frame = 0;
+        setHistory((items) => items.map((item) => (item.id === 'pending-assistant' || item.status === 'streaming' ? { ...item, content: { text: answer } } : item)));
+      };
+      try {
+        if (!cloud) await ensureOllama(settings.ollamaUrl, model);
+        await streamReply(
+          { message: ask, conversationId: live ? selectedId : undefined, provider: cloud ? 'openai' : 'ollama', model },
+          {
+            signal: controller.signal,
+            onStart: (event) => {
+              setAura('speaking');
+              if (!live) navigate(`/conversations/${event.conversationId}`);
+            },
+            onDelta: (chunk) => {
+              answer += chunk;
+              if (!frame) frame = window.requestAnimationFrame(paint);
+            },
+          },
+        );
+        if (frame) window.cancelAnimationFrame(frame);
+        paint();
+        setAura('idle');
+        reloadRemote();
+        if (live && selectedId) {
+          const saved = await listMessages(selectedId);
+          setHistory(saved);
+        }
+      } catch (error) {
+        if (frame) window.cancelAnimationFrame(frame);
+        const message = controller.signal.aborted ? answer || '已停止生成' : error instanceof Error ? error.message : '模型服务暂时不可用';
+        setHistory((items) => items.map((item) => (item.role === 'assistant' && !item.content.text ? { ...item, content: { text: message }, status: 'error' } : item)));
+        setAura(controller.signal.aborted ? 'idle' : 'error');
+        if (!controller.signal.aborted) toast(message, { icon: 'circle-alert' });
+      } finally {
+        stopRef.current = null;
+        setBusy(false);
+      }
+    })();
   };
 
   const contextButton = (
@@ -171,10 +305,30 @@ export function ConversationsPage() {
                 </button>
               </div>
             </div>
-          ) : (
-            <h3>演示</h3>
-          )}
-          {visible.map((item) => (
+          ) : null}
+          {visible.some((item) => item.group === '记录') ? <h3>记录</h3> : null}
+          {visible
+            .filter((item) => item.group === '记录')
+            .map((item) => (
+            <Link
+              key={item.id}
+              className="srow"
+              to={`/conversations/${item.id}`}
+              aria-current={item.id === selectedId ? true : undefined}
+              onClick={() => {
+                if (window.innerWidth < 1120) closeConversationPopovers();
+              }}
+            >
+              <Icon name={item.pinned ? 'pin' : item.icon} />
+              <span className="t">{item.title}</span>
+              <time>{item.when}</time>
+              <span className="x">{item.excerpt}</span>
+            </Link>
+          ))}
+          {visible.some((item) => item.group !== '记录') ? <h3>演示</h3> : null}
+          {visible
+            .filter((item) => item.group !== '记录')
+            .map((item) => (
             <Link
               key={item.id}
               className="srow"
@@ -197,7 +351,7 @@ export function ConversationsPage() {
           <div className="fresh">
             <button ref={slot} className="core-slot" type="button" aria-label="与 AURA 语音对话" />
             <h2>新对话</h2>
-            <p>说出来，或者在下面输入。模型尚未接入，发送后只会留下一条演示说明。</p>
+            <p>说出来，或者在下面输入。本机 Ollama 连通后，发送会得到真实回复并保存。</p>
             <div className="sugs">
               {FRESH_SUGGESTIONS.map(([icon, text]) => (
                 <button key={text} type="button" onClick={() => submit(text)}>
@@ -240,6 +394,11 @@ export function ConversationsPage() {
                         if (!title) toast('名称不能为空', { icon: 'circle-alert' });
                         else if (title !== current.title) {
                           patch(current.id, { title });
+                          if (live) {
+                            void renameConversation(current.id, title).catch((error: unknown) => {
+                              toast(error instanceof Error ? error.message : '重命名没有完成', { icon: 'circle-alert' });
+                            });
+                          }
                           toast('已重命名');
                         }
                         setRenaming(false);
@@ -248,7 +407,7 @@ export function ConversationsPage() {
                   ) : (
                     <h2>{current.title}</h2>
                   )}
-                  <div className="meta">演示会话 · 模型未接入</div>
+                  <div className="meta">{live ? '本机模型' : '演示会话 · 模型未接入'}</div>
                 </div>
                 <div className="acts">
                   <button
@@ -332,23 +491,36 @@ export function ConversationsPage() {
                     const thread = current;
                     setMenuOpen(false);
                     void confirm({
-                      risk: '删除后无法在 AURA 里找回',
+                      risk: live ? '会从你的账号里删除这次对话' : '删除后无法在 AURA 里找回',
                       title: `删除会话「${thread.title}」？`,
-                      rows: [
-                        ['messages-square', '会删除', '这次演示会话在列表里的位置'],
-                        ['brain', '不会删除', '记忆页里的演示条目'],
-                        ['list-checks', '不会删除', '任务页里的演示记录'],
-                      ],
+                      rows: live
+                        ? [
+                            ['messages-square', '会删除', '这条已保存的对话和消息'],
+                            ['brain', '不会删除', '记忆页里的演示条目'],
+                          ]
+                        : [
+                            ['messages-square', '会删除', '这次演示会话在列表里的位置'],
+                            ['brain', '不会删除', '记忆页里的演示条目'],
+                            ['list-checks', '不会删除', '任务页里的演示记录'],
+                          ],
                       deny: '取消',
                       allow: '删除会话',
                       danger: true,
                     }).then((ok) => {
                       if (!ok) return;
                       const local = thread.id.startsWith('local-');
+                      const saved = remote.some((item) => item.id === thread.id);
                       if (local) setLocals((items) => items.filter((item) => item.id !== thread.id));
-                      else patch(thread.id, { hidden: true });
+                      else if (!saved) patch(thread.id, { hidden: true });
                       const next = library.find((item) => item.id !== thread.id);
                       navigate(next ? `/conversations/${next.id}` : '/conversations/new');
+                      if (saved) {
+                        void deleteConversation(thread.id)
+                          .then(() => setRemote((items) => items.filter((item) => item.id !== thread.id)))
+                          .catch((error: unknown) => toast(error instanceof Error ? error.message : '删除没有完成', { icon: 'circle-alert' }));
+                        toast('已删除会话', { icon: 'trash-2' });
+                        return;
+                      }
                       toast('已删除会话', {
                         icon: 'trash-2',
                         action: {
@@ -371,12 +543,20 @@ export function ConversationsPage() {
             <div className="stream">
               <div className="col">
                 <article className="ex">
-                  <p className="ask">{current.ask}</p>
-                  <div className="answer">
-                    {current.answer.map((paragraph) => (
-                      <p key={paragraph}>{paragraph}</p>
-                    ))}
-                    {note ? <p>{note}</p> : null}
+                  <p className="ask">{live ? history.filter((item) => item.role === 'user').at(-1)?.content.text : current.ask}</p>
+                  <div className={`answer${live && history.some((item) => item.status === 'streaming') ? ' streaming' : ''}`}>
+                    <Markdown
+                      text={
+                        live
+                          ? history
+                              .filter((item) => item.role === 'assistant')
+                              .map((item) => item.content.text)
+                              .filter(Boolean)
+                              .join('\n\n')
+                          : current.answer.join('\n\n')
+                      }
+                    />
+                    {note && !live ? <p>{note}</p> : null}
                   </div>
                   <div className="answer-actions">
                     <button
@@ -426,7 +606,7 @@ export function ConversationsPage() {
                       <Icon name="volume-2" />
                     </button>
                     <span className="grow" />
-                    <span className="meta">未接入 · 演示</span>
+                    <span className="meta">{live ? '本机模型' : '未接入 · 演示'}</span>
                   </div>
                 </article>
               </div>
@@ -434,7 +614,7 @@ export function ConversationsPage() {
           </>
         )}
         <div className="col composer">
-          <CommandBar value={draft} onChange={setDraft} onSubmit={() => submit(draft)} />
+          <CommandBar value={draft} onChange={setDraft} busy={busy} onStop={() => stopRef.current?.abort()} onSubmit={() => submit(draft)} />
         </div>
       </section>
       <aside className="ctx" aria-label="这次对话用到的上下文" data-enter="" style={{ ['--enter' as string]: 2 }}>
@@ -445,7 +625,7 @@ export function ConversationsPage() {
           </button>
         </div>
         {fresh ? (
-          <p className="none">新对话开始后，这里会列出用到的画面、附件、工具和记忆。模型未接入，所以现在是空的。</p>
+          <p className="none">新对话开始后，这里会列出用到的画面、附件、工具和记忆。这些还没有接入，所以现在是空的。</p>
         ) : (
           <>
             <section>
@@ -464,7 +644,7 @@ export function ConversationsPage() {
               <h3>隐私</h3>
               <p className="privacy">
                 <Icon name="shield-check" className="i i-14" />
-                <span>这次对话的内容都没有离开这台浏览器。模型未接入。</span>
+                <span>{live ? `这次对话发给${settings.model === 'gpt' ? ' OpenAI' : '本机 Ollama'}，并保存在你的账号里。没有调用工具，也没有读取记忆。` : '这次是演示会话，内容没有发给模型。'}</span>
               </p>
             </section>
           </>

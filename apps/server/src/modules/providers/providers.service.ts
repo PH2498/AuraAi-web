@@ -9,6 +9,8 @@ import { encryptSecret, decryptSecret, keyHint } from '../../common/secrets';
 import { DatabaseService } from '../../database/database.service';
 import { providerConfigs } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
+import { OllamaAdapter } from '../ai/ollama.adapter';
+import { OpenAiAdapter } from '../ai/openai.adapter';
 
 const PROVIDERS = ['ollama', 'openai', 'anthropic', 'gemini'] as const;
 
@@ -138,6 +140,26 @@ export class ProvidersService {
       metadata: { provider: current.provider },
     });
     return { ok: true };
+  }
+
+  async test(userId: string, id: string) {
+    const row = await this.owned(userId, id);
+    const signal = AbortSignal.timeout(8_000);
+    const key = row.encryptedApiKey ? decryptSecret(row.encryptedApiKey, this.env.ENCRYPTION_KEY) : '';
+    const health =
+      row.provider === 'ollama'
+        ? await new OllamaAdapter(row.baseUrl || 'http://127.0.0.1:11434').healthCheck(row.defaultModel, signal)
+        : row.provider === 'openai'
+          ? await new OpenAiAdapter(row.baseUrl || 'https://api.openai.com/v1', key).healthCheck(row.defaultModel, signal)
+          : { ok: false, message: '这个提供方这一阶段还不能测试连接' };
+    await this.audit.record({
+      userId,
+      action: 'provider.test',
+      resourceType: 'provider_config',
+      resourceId: row.id,
+      metadata: { provider: row.provider, ok: health.ok },
+    });
+    return health;
   }
 
   private async owned(userId: string, id: string) {

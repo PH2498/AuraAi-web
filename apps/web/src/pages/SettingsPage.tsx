@@ -4,6 +4,7 @@ import { useSession } from '../app/session';
 import { useCoreSlot } from '../components/aura-core/CoreProvider';
 import { Icon, Wordmark } from '../components/icon';
 import { MODELS, type ModelId, type WebSettings } from '../state/settings';
+import { listProviders, saveOpenAiKey } from '../chat/api';
 
 const SECTIONS = [
   ['general', 'sliders-horizontal', '通用'],
@@ -68,13 +69,22 @@ export function SettingsPage() {
     setAura,
     confirm,
     toast,
+    account,
+    logout,
   } = useSession();
   const navigate = useNavigate();
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [openaiHint, setOpenaiHint] = useState<string | null>(null);
+  const [openaiConfigured, setOpenaiConfigured] = useState(false);
   const { section = 'general' } = useParams();
   const current = (SECTIONS.some((item) => item[0] === section) ? section : 'general') as Section;
   const slot = useCoreSlot<HTMLButtonElement>(true);
   const [query, setQuery] = useState('');
   const [probe, setProbe] = useState(ollamaReady ? '上次测试已连通。' : '尚未测试。');
+  useEffect(() => {
+    if (!ollamaReady) return;
+    setProbe(ollamaModels.length ? `已连通，可用 ${ollamaModels.length} 个模型` : '已连通');
+  }, [ollamaReady, ollamaModels]);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
@@ -87,6 +97,21 @@ export function SettingsPage() {
   const camOwned = useRef(false);
   const searching = query.trim().length > 0;
   const localOnly = settings.runMode === 'local-only';
+
+  useEffect(() => {
+    if (!account) {
+      setOpenaiConfigured(false);
+      setOpenaiHint(null);
+      return;
+    }
+    void listProviders()
+      .then((rows) => {
+        const openai = rows.find((item) => item.provider === 'openai');
+        setOpenaiConfigured(Boolean(openai?.keyConfigured));
+        setOpenaiHint(openai?.keyHint ?? null);
+      })
+      .catch(() => undefined);
+  }, [account]);
 
   useEffect(() => {
     const load = () => setVoices(window.speechSynthesis?.getVoices() ?? []);
@@ -167,7 +192,7 @@ export function SettingsPage() {
         </label>
         <button ref={slot} className="core-slot" type="button" aria-label="AURA 状态" />
         {SECTIONS.map(([id, icon, label]) => (
-          <button key={id} type="button" data-sec={id} aria-current={current === id ? 'page' : undefined} onClick={() => navigate(`/settings/${id}`)}>
+          <button key={id} type="button" data-sec={id} aria-current={current === id ? 'true' : 'false'} onClick={() => navigate(`/settings/${id}`)}>
             <Icon name={icon} />
             <span>{label}</span>
           </button>
@@ -254,7 +279,58 @@ export function SettingsPage() {
             <div className={`block${out(query, '提供方 ollama openai anthropic 密钥 key') ? ' is-out' : ''}`}>
               <h3>提供方</h3>
               <Provider find={query} name="Ollama" icon="hard-drive" desc="本机 · 不需要密钥" detail={settings.ollamaUrl} ok={ollamaReady} label={ollamaReady ? '已连接' : '未配置'} />
-              <Provider find={query} name="OpenAI" icon="cloud" desc="GPT-4o · 网页不保存密钥" blocked={localOnly} label={localOnly ? '仅本地模式不可用' : '未配置 Key'} />
+              <Provider
+                find={query}
+                name="OpenAI"
+                icon="cloud"
+                desc={openaiConfigured ? `密钥保存在服务器 ····${openaiHint ?? ''}` : 'GPT-4o · 网页不保存密钥'}
+                blocked={localOnly}
+                label={localOnly ? '仅本地模式不可用' : openaiConfigured ? '已保存密钥' : '未配置 Key'}
+              />
+              {account && !localOnly ? (
+                <div className={`prow${out(query, 'openai 密钥 key') ? ' is-out' : ''}`}>
+                  <Icon name="lock" />
+                  <div className="prow-body">
+                    <div className="prow-head">
+                      <div>
+                        <b>保存 OpenAI 密钥</b>
+                        <span className="s">只发送一次到服务器，输入框随后清空。</span>
+                      </div>
+                    </div>
+                    <div className="prow-actions">
+                      <input
+                        className="input"
+                        type="password"
+                        autoComplete="off"
+                        aria-label="OpenAI 密钥"
+                        placeholder="sk-…"
+                        value={openaiKey}
+                        onChange={(event) => setOpenaiKey(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={openaiKey.trim().length < 8}
+                        onClick={() => {
+                          const key = openaiKey.trim();
+                          setOpenaiKey('');
+                          void saveOpenAiKey(key)
+                            .then(() => listProviders())
+                            .then((rows) => {
+                              const openai = rows.find((item) => item.provider === 'openai');
+                              setOpenaiConfigured(Boolean(openai?.keyConfigured));
+                              setOpenaiHint(openai?.keyHint ?? null);
+                              toast('密钥已保存在服务器');
+                            })
+                            .catch((error: unknown) => toast(error instanceof Error ? error.message : '密钥没有保存', { icon: 'circle-alert' }));
+                        }}
+                      >
+                        保存
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <Provider find={query} name="Anthropic" icon="cloud" desc="Claude Sonnet 4 · 网页不保存密钥" blocked={localOnly} label={localOnly ? '仅本地模式不可用' : '未配置 Key'} />
             </div>
           </section>
@@ -614,7 +690,7 @@ export function SettingsPage() {
                 <option value="low">降低特效</option>
               </Select>
             </Row>
-            <Row query={query} find="上下文 长度 token" title="上下文长度" desc="发给本地模型的窗口大小。模型未接入，这里只记下偏好。">
+            <Row query={query} find="上下文 长度 token" title="上下文长度" desc="记下偏好。发给模型时，这一阶段还没有按这个数字截断。">
               <Select value={settings.ctx} label="上下文长度" onChange={(value) => onChange({ ctx: value as WebSettings['ctx'] })}>
                 <option value="4096">4,096</option>
                 <option value="8192">8,192</option>
@@ -661,7 +737,25 @@ export function SettingsPage() {
               <Wordmark />
               <span className="pill">Presence · Web</span>
             </div>
-            <Row query={query} find="版本 build" title="版本" desc="界面来自 v2 设计稿。回复、任务和记忆里的示例都标成演示。">
+            <Row query={query} find="账号 登录 退出" title="账号" desc={account ? account.email : '发送对话前会要求登录。会话保存在你的账号下。'}>
+              {account ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    void logout().then(() => {
+                      toast('已退出登录');
+                      navigate('/');
+                    });
+                  }}
+                >
+                  退出登录
+                </button>
+              ) : (
+                <span className="status-line">未登录</span>
+              )}
+            </Row>
+            <Row query={query} find="版本 build" title="版本" desc="界面来自 v2 设计稿。任务和记忆里的示例仍标成演示。">
               <span className="num status-line">2026.11</span>
             </Row>
             <Row query={query} find="字体 geist 许可" title="字体" desc="Geist / Geist Mono，SIL Open Font License 1.1。">

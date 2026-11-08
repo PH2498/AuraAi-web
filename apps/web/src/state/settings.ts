@@ -22,11 +22,11 @@ export type RunMode = 'local-first' | 'local-only' | 'cloud';
 
 export const MODELS: Record<
   ModelId,
-  { name: string; provider: string; where: string; cloud: boolean; icon: string }
+  { name: string; provider: string; where: string; cloud: boolean; icon: string; caps: string[] }
 > = {
-  local: { name: 'Qwen2.5 7B', provider: 'Ollama', where: '本地', cloud: false, icon: 'hard-drive' },
-  gpt: { name: 'GPT-4o', provider: 'OpenAI', where: '云端', cloud: true, icon: 'cloud' },
-  claude: { name: 'Claude Sonnet 4', provider: 'Anthropic', where: '云端', cloud: true, icon: 'cloud' },
+  local: { name: 'Qwen2.5 7B', provider: 'Ollama', where: '本地', cloud: false, icon: 'hard-drive', caps: ['文本', '视觉', '工具'] },
+  gpt: { name: 'GPT-4o', provider: 'OpenAI', where: '云端', cloud: true, icon: 'cloud', caps: ['文本', '视觉', '语音', '工具'] },
+  claude: { name: 'Claude Sonnet 4', provider: 'Anthropic', where: '云端', cloud: true, icon: 'cloud', caps: ['文本', '视觉', '工具'] },
 };
 
 export type WebSettings = {

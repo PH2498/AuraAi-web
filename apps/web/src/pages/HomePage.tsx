@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../app/session';
 import { useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
+import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
+import { ensureOllama, listConversations, streamReply, type ServerConversation } from '../chat/api';
 import { CONVERSATIONS, SUGGESTIONS } from '../fixtures/content';
 import { MODELS, STATE_LABEL } from '../state/settings';
 
@@ -17,11 +19,14 @@ function greeting() {
 }
 
 export function HomePage() {
-  const { aura, setAura, sensing, toggleSensor, settings, ollamaReady, drawerOpen, setDrawerOpen, toast } = useSession();
+  const { aura, setAura, sensing, toggleSensor, settings, ollamaReady, ollamaModels, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
   const [draft, setDraft] = useState('');
   const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean } | null>(null);
   const [focused, setFocused] = useState(false);
   const [sessionQuery, setSessionQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState<ServerConversation[]>([]);
+  const stopRef = useRef<AbortController | null>(null);
   const slot = useCoreSlot<HTMLButtonElement>(true);
   const pointer = useCorePointer(() => void toggleSensor('mic'));
 
@@ -44,29 +49,86 @@ export function HomePage() {
     const timer = window.setTimeout(() => field?.focus(), 80);
     return () => window.clearTimeout(timer);
   }, [drawerOpen]);
-  const sessions = CONVERSATIONS.filter((item) => {
-    const q = sessionQuery.trim();
-    return !q || item.title.includes(q) || item.excerpt.includes(q);
-  });
+  useEffect(() => {
+    if (!account) {
+      setSaved([]);
+      return;
+    }
+    void listConversations().then(setSaved).catch(() => setSaved([]));
+  }, [account, drawerOpen, reading?.settled]);
+  const query = sessionQuery.trim();
+  const savedSessions = saved.filter((item) => !query || item.title.includes(query));
+  const sessions = CONVERSATIONS.filter((item) => !query || item.title.includes(query) || item.excerpt.includes(query));
 
   const submit = (text: string) => {
     const ask = text.trim();
-    if (!ask) return;
+    if (!ask || busy) return;
     setDraft('');
     const now = new Date();
-    setReading({
-      ask,
-      answer: '这是演示回复。模型还没有接入，所以我不会假装已经完成这件事。',
+    const stamp = {
       at: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       when: now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }),
-      settled: false,
-    });
-    setAura('thinking');
-    window.setTimeout(() => {
-      setAura('idle');
-      setReading((current) => (current && current.ask === ask ? { ...current, settled: true } : current));
-    }, 900);
+    };
+    const show = (answer: string, state: 'idle' | 'error' = 'error') => {
+      setReading({ ask, answer, ...stamp, settled: true });
+      setAura(state);
+    };
+    void (async () => {
+      if (!(await requireAccount())) {
+        setDraft(ask);
+        return;
+      }
+      if (settings.model === 'claude') {
+        show('Claude 这一阶段还没有接入。当前可以对话的是本机 Ollama。');
+        return;
+      }
+      const cloud = settings.model === 'gpt';
+      const model = cloud ? 'gpt-4o' : (ollamaModels.find((name) => name.startsWith('qwen2.5')) ?? ollamaModels[0] ?? 'qwen2.5:7b');
+      const controller = new AbortController();
+      stopRef.current = controller;
+      setBusy(true);
+      setAura('thinking');
+      setReading({ ask, answer: '', ...stamp, settled: false });
+      let answer = '';
+      let frame = 0;
+      const paint = () => {
+        frame = 0;
+        setReading((current) => (current && current.ask === ask ? { ...current, answer } : current));
+      };
+      try {
+        if (!cloud) await ensureOllama(settings.ollamaUrl, model);
+        await streamReply(
+          { message: ask, provider: cloud ? 'openai' : 'ollama', model },
+          {
+            signal: controller.signal,
+            onStart: () => setAura('speaking'),
+            onDelta: (text) => {
+              answer += text;
+              if (!frame) frame = window.requestAnimationFrame(paint);
+            },
+          },
+        );
+        if (frame) window.cancelAnimationFrame(frame);
+        setReading((current) => (current && current.ask === ask ? { ...current, answer, settled: true } : current));
+        setAura('idle');
+      } catch (error) {
+        if (frame) window.cancelAnimationFrame(frame);
+        if (controller.signal.aborted) {
+          setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || '已停止生成', settled: true } : current));
+          setAura('idle');
+          return;
+        }
+        const message = error instanceof Error ? error.message : '模型服务暂时不可用';
+        setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || message, settled: true } : current));
+        setAura('error');
+      } finally {
+        stopRef.current = null;
+        setBusy(false);
+      }
+    })();
   };
+
+  const stop = () => stopRef.current?.abort();
 
   return (
     <main className="home">
@@ -134,31 +196,31 @@ export function HomePage() {
                 <details className="activity" open={!reading.settled}>
                   <summary>
                     <Icon name={reading.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
-                    <span className="sum">{reading.settled ? '演示回复 · 模型未接入' : '正在写演示回复'}</span>
+                    <span className="sum">{reading.settled ? '本机模型回复' : '正在生成'}</span>
                     <Icon name="chevron-right" className="i i-14 chev" />
                   </summary>
                   <ol>
                     <li data-s={reading.settled ? 'done' : 'active'}>
                       <Icon name={reading.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
                       <div>
-                        写下演示说明
-                        <div className="d">没有发给任何模型</div>
+                        写入回复
+                        <div className="d">{reading.settled ? '已保存到会话' : '正在接收模型输出'}</div>
                       </div>
                       <span className="t">{reading.settled ? '完成' : ''}</span>
                     </li>
                   </ol>
                 </details>
                 <div className={`answer${reading.settled ? '' : ' streaming'}`}>
-                  <p>{reading.answer}</p>
+                  <Markdown text={reading.answer} />
                 </div>
                 <div className={`answer-actions${reading.settled ? ' show' : ''}`}>
                   <button
                     type="button"
                     className="icon-btn icon-btn-sm"
-                    aria-label="复制演示回复"
+                    aria-label="复制回复"
                     onClick={() => {
                       void navigator.clipboard.writeText(reading.answer).then(
-                        () => toast('已复制演示回复'),
+                        () => toast('已复制'),
                         () => toast('复制失败：剪贴板不可用'),
                       );
                     }}
@@ -174,12 +236,18 @@ export function HomePage() {
 
       <section className="dock">
         <div onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
-          <CommandBar value={draft} onChange={setDraft} onSubmit={() => submit(draft)} />
+          <CommandBar value={draft} onChange={setDraft} busy={busy} onStop={stop} onSubmit={() => submit(draft)} />
         </div>
         <div className="dock-foot">
           <div className="foot-row" id="recentRow">
             <span className="lead">继续</span>
-            {CONVERSATIONS.slice(0, 2).map((item) => (
+            {saved.slice(0, 2).map((item) => (
+              <Link key={item.id} to={`/conversations/${item.id}`}>
+                <Icon name="messages-square" className="i i-14" />
+                <span>{item.title}</span>
+              </Link>
+            ))}
+            {CONVERSATIONS.slice(0, saved.length ? 0 : 2).map((item) => (
               <Link key={item.id} to={`/conversations/${item.id}`}>
                 <Icon name={item.icon} className="i i-14" />
                 <span>{item.title}</span>
@@ -198,7 +266,7 @@ export function HomePage() {
           </div>
           <p className="hint warn">
             <Icon name="triangle-alert" className="i i-14" />
-            <span>演示界面 · 模型尚未接入</span>
+            <span>{ollamaReady ? '对话发给本机 Ollama。任务和记忆仍是演示。' : 'Ollama 未连通。任务和记忆仍是演示。'}</span>
           </p>
         </div>
       </section>
@@ -229,7 +297,7 @@ export function HomePage() {
         <span className="v">
           {ollamaReady && settings.model === 'local' ? `${MODELS.local.name} · 已连接` : `${MODELS[settings.model].name} · 未配置`}
         </span>
-        <span>未接入模型</span>
+        <span>{ollamaReady && settings.model === 'local' ? (ollamaModels[0] ?? 'qwen2.5:7b') : '尚未连通'}</span>
       </aside>
 
       <aside className={`drawer${drawerOpen ? ' open' : ''}`} id="drawer" aria-label="会话">
@@ -251,7 +319,16 @@ export function HomePage() {
           />
         </div>
         <div className="sessions">
-          {sessions.length === 0 ? <p className="empty">没有找到包含「{sessionQuery.trim()}」的会话</p> : <h3>演示</h3>}
+          {savedSessions.length === 0 && sessions.length === 0 ? <p className="empty">没有找到包含「{sessionQuery.trim()}」的会话</p> : null}
+          {savedSessions.length > 0 ? <h3>记录</h3> : null}
+          {savedSessions.map((item) => (
+            <Link key={item.id} className="session" to={`/conversations/${item.id}`} onClick={() => setDrawerOpen(false)}>
+              <Icon name="messages-square" />
+              <span>{item.title}</span>
+              <time>{new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}</time>
+            </Link>
+          ))}
+          {sessions.length > 0 ? <h3>演示</h3> : null}
           {sessions.map((item) => (
             <Link key={item.id} className="session" to={`/conversations/${item.id}`} onClick={() => setDrawerOpen(false)}>
               <Icon name={item.icon} />
