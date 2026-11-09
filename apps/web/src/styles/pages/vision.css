@@ -16,9 +16,9 @@ body[data-page="vision"] .privacy.cloud { color: var(--warning); border-color: c
 body[data-page="vision"] .privacy.cloud .i { color: var(--warning); }
 body[data-page="vision"] .frame { position: relative; min-height: 0; border-radius: 20px; overflow: hidden; display: grid; place-items: center;
     background: color-mix(in oklch, var(--void) 62%, transparent); box-shadow: inset 0 0 0 1px var(--border), var(--shadow-float); }
-body[data-page="vision"] .view { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; }
+body[data-page="vision"] .view { position: absolute; inset: 0; display: none; }
 body[data-page="vision"] .live .view, body[data-page="vision"] .paused .view { display: block; }
-body[data-page="vision"] .view video { display: block; width: 100%; height: 100%; object-fit: contain; }
+body[data-page="vision"] .view video { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 body[data-page="vision"] .mirror video, body[data-page="vision"] .mirror .motion { transform: scaleX(-1); }
 body[data-page="vision"] .view .motion { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity var(--dur-panel) var(--ease); pointer-events: none; }
 body[data-page="vision"] .show-motion .view .motion { opacity: 1; }
@@ -63,12 +63,21 @@ body[data-page="vision"] .controls .tip { font-size: 12.5px; color: var(--muted)
 body[data-page="vision"] .toggle { display: inline-flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: var(--muted); transition: background var(--dur-micro) var(--ease), color var(--dur-micro) var(--ease); }
 body[data-page="vision"] .toggle:hover { background: var(--hover); color: var(--fg); }
 body[data-page="vision"] .insight { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; border-left: 1px solid var(--border); }
-body[data-page="vision"] .ins-head { display: flex; align-items: center; gap: 14px; padding: 14px 20px 12px; }
-body[data-page="vision"] .ins-head .core-slot { --slot: 60px; }
+body[data-page="vision"] .ins-head { display: flex; align-items: center; gap: 14px; padding: 18px 22px 8px; }
 body[data-page="vision"] .ins-head h1 { font-size: 18px; font-weight: 560; letter-spacing: -0.015em; }
 body[data-page="vision"] .ins-head .sub { margin-top: 3px; font-size: 12.5px; color: var(--muted); }
 body[data-page="vision"] .ins-head .sub b { color: var(--fg); font-weight: 520; }
-body[data-page="vision"] .ins-body { min-height: 0; padding: 4px 20px 16px; }
+body[data-page="vision"] .ins-body { min-height: 0; display: flex; flex-direction: column; padding: 4px 22px 18px; }
+body[data-page="vision"] .ins-copy { flex: none; max-height: 38%; }
+body[data-page="vision"] .pending { display: grid; gap: 4px; margin: 0; }
+body[data-page="vision"] .pending b { font-size: 15px; font-weight: 560; }
+body[data-page="vision"] .pending span { font-size: 12.5px; color: var(--muted); }
+body[data-page="vision"] .orb-stage { flex: 1; min-height: 180px; display: grid; place-items: center; }
+body[data-page="vision"] .orb-stage .core-slot { --slot: clamp(148px, 24vh, 188px); }
+body[data-page="vision"] .finding { display: grid; gap: 10px; padding: 8px 0 16px; }
+body[data-page="vision"] .finding h2 { font-size: 16px; font-weight: 560; line-height: 1.45; }
+body[data-page="vision"] .finding ul { display: grid; gap: 6px; margin: 0; padding-left: 18px; color: var(--muted); }
+body[data-page="vision"] .finding .when { color: var(--faint, var(--muted)); font-size: 12px; }
 body[data-page="vision"] .latest { display: grid; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
 body[data-page="vision"] .latest .thumb { position: relative; display: block; width: 100%; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--border-strong); }
 body[data-page="vision"] .latest .thumb img { display: block; width: 100%; height: auto; max-height: 220px; object-fit: contain; background: var(--void); }

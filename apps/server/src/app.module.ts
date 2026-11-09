@@ -10,6 +10,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { HealthModule } from './modules/health/health.module';
 import { ProvidersModule } from './modules/providers/providers.module';
+import { VisionModule } from './modules/vision/vision.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { ProvidersModule } from './modules/providers/providers.module';
     AgentModule,
     ConversationsModule,
     ProvidersModule,
+    VisionModule,
   ],
 })
 export class AppModule {}

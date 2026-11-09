@@ -273,7 +273,7 @@ export function SettingsPage() {
             <Row query={query} find="默认 对话 模型" title="默认对话模型" desc="新对话使用这个模型。云端项未配置时不会发出请求。">
               <ModelSelect value={settings.model} label="默认对话模型" localOnly={localOnly} onChange={(value) => onChange({ model: value })} />
             </Row>
-            <Row query={query} find="默认 视觉 模型 画面" title="默认视觉模型" desc="分析摄像头或屏幕时使用。模型未接入，不会发出画面。">
+            <Row query={query} find="默认 视觉 模型 画面" title="默认视觉模型" desc="只在视觉页点「分析这一帧」时使用。本机需要已安装的看图模型；没有的话会说明，不会拿文字模型假装看过。">
               <ModelSelect value={settings.visionModel} label="默认视觉模型" localOnly={localOnly} onChange={(value) => onChange({ visionModel: value })} />
             </Row>
             <div className={`block${out(query, '提供方 ollama openai anthropic 密钥 key') ? ' is-out' : ''}`}>
@@ -475,7 +475,7 @@ export function SettingsPage() {
                   {preview ? '关闭预览' : '打开预览'}
                 </button>
             </Row>
-            <Row query={query} find="间隔 持续 采样" title="持续检查的间隔" desc="只在视觉页选了持续之后生效。模型未接入，不会按这个间隔分析。">
+            <Row query={query} find="间隔 持续 采样" title="持续检查的间隔" desc="这一阶段不会自动连续分析。这个间隔只限制「分析这一帧」的连续点击。">
               <Select value={settings.interval} label="检查间隔" onChange={(value) => onChange({ interval: value as WebSettings['interval'] })}>
                 <option value="2">每 2 秒</option>
                 <option value="5">每 5 秒</option>
@@ -483,7 +483,7 @@ export function SettingsPage() {
                 <option value="30">每 30 秒</option>
               </Select>
             </Row>
-            <Row query={query} find="阈值 变化 跳过" title="变化阈值" desc={`低于 ${settings.sensitivity}% 的帧会被跳过。模型未接入，现在不会分析帧。`}>
+            <Row query={query} find="阈值 变化 跳过" title="变化阈值" desc={`低于 ${settings.sensitivity}% 的帧会被跳过。持续分析还没有做，现在不会按阈值挑帧。`}>
               <input
                 className="range"
                 type="range"
@@ -514,7 +514,7 @@ export function SettingsPage() {
               <h2>隐私与权限</h2>
               <p>使用统计保持关闭。网页不会发送使用数据。</p>
             </header>
-            <Row query={query} find="上传 云端 同意" title="云端上传" desc="选了云端模型并附带画面时，如何征得同意。模型未接入，现在不会上传。">
+            <Row query={query} find="上传 云端 同意" title="云端上传" desc="视觉模型选了云端、并且点「分析这一帧」时，如何征得同意。本机看图不走这条。">
               <Select value={settings.uploadAsk} label="云端上传" onChange={(value) => onChange({ uploadAsk: value as WebSettings['uploadAsk'] })}>
                 <option value="ask">每次询问</option>
                 <option value="always">这次会话内记住允许</option>

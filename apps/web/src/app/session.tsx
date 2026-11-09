@@ -199,8 +199,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               : await platform.requestScreenCapture();
         stream.getTracks().forEach((track) =>
           track.addEventListener('ended', () => {
-            stopKind(kind);
-            if (kind === 'mic') setAura('idle');
+            setStreams((current) => {
+              current[kind]?.getTracks().forEach((item) => item.stop());
+              const next = { ...current, [kind]: null };
+              const visionStillOn = Boolean(next.cam || next.screen);
+              if (kind === 'mic' || !visionStillOn) setAura('idle');
+              return next;
+            });
+            if (kind === 'mic') stopAudio();
           }),
         );
         setStreams((current) => ({ ...current, [kind]: stream }));
@@ -226,7 +232,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           pump();
         } else {
           setAura('vision');
-          toast(kind === 'cam' ? '摄像头已开启。模型未接入，不会分析画面。' : '屏幕已共享。模型未接入，不会分析画面。');
+          toast(kind === 'cam' ? '摄像头已开启。只有点「分析这一帧」才会上传这一帧。' : '屏幕已共享。只有点「分析这一帧」才会上传这一帧。');
         }
         return { ok: true, active: true };
       } catch (error) {

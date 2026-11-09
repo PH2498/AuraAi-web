@@ -240,7 +240,7 @@ export function HomePage() {
             ) : aura === 'vision' ? (
               <>
                 <b>画面已打开</b>
-                <span> · 这一阶段不会分析画面。</span>
+                <span> · 要分析的话，到视觉页点「分析这一帧」。</span>
               </>
             ) : stages.find((item) => item.status === 'active') ? (
               <b>{stages.find((item) => item.status === 'active')?.label}</b>

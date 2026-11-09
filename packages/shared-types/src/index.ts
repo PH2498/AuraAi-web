@@ -60,6 +60,13 @@ export interface AgentTaskDto {
   updatedAt: string;
 }
 
+export interface VisionAnalyzeResult {
+  id: string;
+  summary: string;
+  details?: string[];
+  createdAt: string;
+}
+
 export type AgentEvent =
   | { type: 'task.updated'; taskId: string; task: AgentTaskDto }
   | { type: 'step.started'; taskId: string; step: AgentStepDto }
