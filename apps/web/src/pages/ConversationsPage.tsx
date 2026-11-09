@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../app/session';
-import { useCore, useCoreSlot } from '../components/aura-core/CoreProvider';
+import { useCore, useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { CONVERSATIONS } from '../fixtures/content';
 import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type ServerMessage } from '../chat/api';
+import { createMemory } from '../memory/api';
+import { fetchSpeech } from '../vision/api';
+import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 
 const FRESH_SUGGESTIONS: [string, string][] = [
   ['monitor', '总结我屏幕上的内容'],
@@ -19,7 +22,7 @@ type Thread = Omit<(typeof CONVERSATIONS)[number], 'id'> & { id: string; pinned:
 export function ConversationsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast, account, requireAccount, settings, ollamaModels, setAura } = useSession();
+  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast, account, requireAccount, settings, ollamaModels, setAura, toggleDictation } = useSession();
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [note, setNote] = useState('');
@@ -34,6 +37,7 @@ export function ConversationsPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const skipRename = useRef(false);
   const slot = useCoreSlot<HTMLButtonElement>(true);
+  const pointer = useCorePointer(() => toggleDictation());
   const core = useCore();
 
   const library = useMemo<Thread[]>(() => {
@@ -163,7 +167,7 @@ export function ConversationsPage() {
       .catch(() => undefined);
   };
 
-  const submit = (text: string) => {
+  const submit = (text: string, speakAfter = false) => {
     const ask = text.trim();
     if (!ask || busy) return;
     if (!fresh && !live) {
@@ -232,6 +236,20 @@ export function ConversationsPage() {
         if (frame) window.cancelAnimationFrame(frame);
         paint();
         setAura('idle');
+        if (speakAfter && answer.trim()) {
+          stopSpeech();
+          setAura('speaking');
+          void fetchSpeech(answer, settings.rate || 1)
+            .then((bytes) => playWav(bytes))
+            .then(() => setAura('idle'))
+            .catch(() => setAura('idle'));
+        }
+        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(ask)) {
+          void createMemory({ content: ask.slice(0, 240), category: 'learned', sourceType: 'conversation', title: ask.slice(0, 40) }).then(
+            () => toast('已放进待确认。确认前不会用于对话。'),
+            () => undefined,
+          );
+        }
         reloadRemote();
         if (live && selectedId) {
           const saved = await listMessages(selectedId);
@@ -356,7 +374,7 @@ export function ConversationsPage() {
       <section className={`main${fresh ? ' is-new' : ''}`} aria-label="会话内容" data-enter="" style={{ ['--enter' as string]: 1 }}>
         {fresh ? (
           <div className="fresh">
-            <button ref={slot} className="core-slot" type="button" aria-label="与 AURA 语音对话" />
+            <button ref={slot} {...pointer} className="core-slot" type="button" aria-label="与 AURA 语音对话" />
             <h2>新对话</h2>
             <p>说出来，或者在下面输入。本机 Ollama 连通后，发送会得到真实回复并保存。</p>
             <div className="sugs">
@@ -373,7 +391,7 @@ export function ConversationsPage() {
           <>
             <div className="col chead-wrap">
               <header className="chead">
-                <button ref={slot} className="core-slot" type="button" aria-label="与 AURA 语音对话" />
+                <button ref={slot} {...pointer} className="core-slot" type="button" aria-label="与 AURA 语音对话" />
                 <div className="ttl">
                   {renaming ? (
                     <input
@@ -596,18 +614,18 @@ export function ConversationsPage() {
                       aria-label="朗读"
                       data-tip="朗读"
                       onClick={() => {
-                        const synth = window.speechSynthesis;
-                        if (!synth) {
-                          toast('这台浏览器不能朗读', { icon: 'circle-alert' });
-                          return;
-                        }
-                        if (synth.speaking) {
-                          synth.cancel();
-                          return;
-                        }
-                        const utter = new SpeechSynthesisUtterance([...current.answer, note].filter(Boolean).join('。'));
-                        utter.lang = 'zh-CN';
-                        synth.speak(utter);
+                        const text = [...current.answer, note].filter(Boolean).join('。').trim();
+                        if (!text) return;
+                        unlockSpeech();
+                        stopSpeech();
+                        setAura('speaking');
+                        void fetchSpeech(text, settings.rate || 1)
+                          .then((bytes) => playWav(bytes))
+                          .then(() => setAura('idle'))
+                          .catch(() => {
+                            toast('这一句没有读出来', { icon: 'circle-alert' });
+                            setAura('idle');
+                          });
                       }}
                     >
                       <Icon name="volume-2" />
@@ -621,7 +639,13 @@ export function ConversationsPage() {
           </>
         )}
         <div className="col composer">
-          <CommandBar value={draft} onChange={setDraft} busy={busy} onStop={() => stopRef.current?.abort()} onSubmit={() => submit(draft)} />
+          <CommandBar
+            value={draft}
+            onChange={setDraft}
+            busy={busy}
+            onStop={() => stopRef.current?.abort()}
+            onSubmit={() => submit(draft, settings.autoRead)}
+          />
         </div>
       </section>
       <aside className="ctx" aria-label="这次对话用到的上下文" data-enter="" style={{ ['--enter' as string]: 2 }}>

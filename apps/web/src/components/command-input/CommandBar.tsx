@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
 import { listProviders } from '../../chat/api';
 import { MODELS, type ModelId } from '../../state/settings';
+import { startBrowserRecognition } from '../../voice/recognition';
 import { Icon } from '../icon';
 
 export function CommandBar({
@@ -20,17 +21,68 @@ export function CommandBar({
   busy?: boolean;
   placeholder?: string;
 }) {
-  const { settings, updateSettings, ollamaReady, account, sensing, streams, toggleSensor } = useSession();
+  const { settings, updateSettings, ollamaReady, account, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, releaseVoiceMeter, markDictationHeard, toast } = useSession();
   const [open, setOpen] = useState(false);
   const [openaiReady, setOpenaiReady] = useState(false);
   const [finder, setFinder] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
+  const stopDictation = useRef(toggleDictation);
+  const writeDraft = useRef(onChange);
+  const beginMeter = useRef(startVoiceMeter);
+  const dropMeter = useRef(releaseVoiceMeter);
+  const heard = useRef(markDictationHeard);
+  stopDictation.current = toggleDictation;
+  writeDraft.current = onChange;
+  beginMeter.current = startVoiceMeter;
+  dropMeter.current = releaseVoiceMeter;
+  heard.current = markDictationHeard;
   const box = useRef<HTMLDivElement>(null);
   const modelBtn = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const current = MODELS[settings.model];
-  const listening = sensing.mic;
+  const listening = dictating;
+
+  useEffect(() => {
+    if (!dictating) return;
+    let handle: { stop: () => void; restart: () => void } | null = null;
+    let reported = false;
+    const fail = (text: string) => {
+      if (reported) return;
+      reported = true;
+      toast(text);
+      stopDictation.current();
+    };
+    const yieldMeter = () => {
+      dropMeter.current();
+      handle?.restart();
+    };
+    const timer = window.setTimeout(() => {
+      handle = startBrowserRecognition({
+        onAudioStart: () => beginMeter.current(),
+        onText: (text) => {
+          writeDraft.current(text);
+          heard.current();
+        },
+        onError: (code) => {
+          if (code === 'not-allowed' || code === 'service-not-allowed') fail('没有获得麦克风。允许之后再点一次语音。');
+          else if (code === 'network') fail('浏览器的语音识别没有连上，这句话没有转成文字。');
+          else if (code === 'audio-capture') {
+            if (dropMeter.current()) return true;
+            fail('麦克风正被占用，这次没有听清。');
+          } else if (code !== 'aborted' && code !== 'no-speech') fail('这次没有听清。可以再说一次。');
+        },
+        onEnd: () => undefined,
+      });
+      if (!handle) fail('这台浏览器不能把语音转成文字。可以改用键盘输入。');
+    }, 120);
+    window.addEventListener('aura-meter-yield', yieldMeter);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('aura-meter-yield', yieldMeter);
+      handle?.stop();
+    };
+  }, [dictating, toast]);
 
   useEffect(() => {
     if (!open && !finder) return;
@@ -91,6 +143,11 @@ export function CommandBar({
     node.srcObject = finder ? streams.cam : null;
     if (finder && streams.cam) void node.play().catch(() => undefined);
   }, [finder, streams.cam]);
+
+  const send = () => {
+    if (dictating) toggleDictation();
+    onSubmit(files);
+  };
 
   const modelItem = (id: ModelId) => {
     const item = MODELS[id];
@@ -156,19 +213,16 @@ export function CommandBar({
           className="cmd-input"
           rows={1}
           value={value}
-          placeholder={placeholder}
+          placeholder={listening ? '正在听…' : placeholder}
           autoComplete="off"
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              if (value.trim() && !busy) onSubmit(files);
+              if (value.trim() && !busy) send();
             }
           }}
         />
-        <div className="cmd-transcript" aria-live="polite">
-          {listening ? '正在听… 音量来自麦克风，不会生成文字。' : ''}
-        </div>
       </div>
       <div className="cmd-tools">
         <label className="icon-btn" aria-label="添加文件或图片" data-tip="文件或图片">
@@ -221,7 +275,7 @@ export function CommandBar({
           className="voice-btn"
           aria-pressed={listening}
           data-tip="语音会话 ⌥ Space"
-          onClick={() => void toggleSensor('mic')}
+          onClick={() => toggleDictation()}
         >
           <Icon name="audio-lines" className="i mic-ico" />
           <span className="bars" aria-hidden="true">
@@ -234,7 +288,7 @@ export function CommandBar({
           className="send-btn"
           aria-label={busy ? '停止生成' : '发送'}
           disabled={!busy && !value.trim()}
-          onClick={() => (busy ? onStop?.() : onSubmit(files))}
+          onClick={() => (busy ? onStop?.() : send())}
         >
           <Icon name={busy ? 'square' : 'arrow-up'} className="i i-18" />
         </button>

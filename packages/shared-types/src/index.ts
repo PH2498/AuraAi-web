@@ -67,6 +67,26 @@ export interface VisionAnalyzeResult {
   createdAt: string;
 }
 
+export type MemoryCategory = 'pref' | 'profile' | 'learned';
+export type MemorySourceType = 'manual' | 'conversation' | 'agent';
+export type MemoryStatus = 'pending' | 'active' | 'archived';
+
+export interface MemoryDto {
+  id: string;
+  category: MemoryCategory;
+  title: string;
+  content: string;
+  sourceType: MemorySourceType;
+  status: MemoryStatus;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TranscriptionResult {
+  text: string;
+}
+
 export type AgentEvent =
   | { type: 'task.updated'; taskId: string; task: AgentTaskDto }
   | { type: 'step.started'; taskId: string; step: AgentStepDto }

@@ -293,10 +293,6 @@ a { color: inherit; text-decoration: none; }
 .cmd-input:focus,
 .cmd-input:focus-visible { outline: none; box-shadow: none; }
 .cmd-input::placeholder { color: var(--muted); }
-.cmd-transcript { display: none; min-height: 26px; font-size: var(--fs-body-lg); line-height: 1.6; color: var(--fg); }
-.cmd-transcript .interim { color: var(--muted); }
-.cmd[data-mode="listening"] .cmd-input { display: none; }
-.cmd[data-mode="listening"] .cmd-transcript { display: block; }
 .cmd-tools { display: flex; align-items: center; gap: 2px; padding: 6px 8px 8px 10px; }
 .cmd-tools .sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 6px; }
 .cmd-tools .grow { flex: 1; }

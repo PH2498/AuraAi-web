@@ -12,7 +12,7 @@ export async function analyzeFrame(image: Blob, provider: 'ollama' | 'openai' | 
 }
 
 export async function fetchSpeech(text: string, rate: number): Promise<ArrayBuffer> {
-  const response = await fetch('/api/v1/vision/speak', {
+  const response = await fetch('/api/v1/voice/speech', {
     method: 'POST',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },

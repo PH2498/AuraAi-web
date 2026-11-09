@@ -134,6 +134,25 @@ export const agentSteps = pgTable(
   (table) => [index('agent_steps_task_id_idx').on(table.taskId)],
 );
 
+export const memories = pgTable(
+  'memories',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    category: text('category').notNull(),
+    title: text('title').notNull(),
+    content: text('content').notNull(),
+    sourceType: text('source_type').notNull(),
+    status: text('status').notNull(),
+    pinned: boolean('pinned').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('memories_user_id_idx').on(table.userId)],
+);
+
 export const auditLogs = pgTable(
   'audit_logs',
   {

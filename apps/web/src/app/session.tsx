@@ -34,8 +34,13 @@ type Session = {
   setAura: (state: AuraState) => void;
   streams: Streams;
   sensing: Record<Sensor, boolean>;
+  dictating: boolean;
   levelRef: RefObject<number>;
   toggleSensor: (kind: Sensor) => Promise<SensorResult>;
+  toggleDictation: () => void;
+  startVoiceMeter: () => void;
+  releaseVoiceMeter: () => boolean;
+  markDictationHeard: () => void;
   stopSensing: () => void;
   ollamaReady: boolean;
   ollamaModels: string[];
@@ -75,6 +80,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<WebSettings>(loadSettings);
   const [aura, setAura] = useState<AuraState>('idle');
   const [streams, setStreams] = useState<Streams>(EMPTY_STREAMS);
+  const [dictating, setDictating] = useState(false);
+  const dictatingRef = useRef(false);
+  dictatingRef.current = dictating;
   const [ollamaReady, setOllamaReady] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
@@ -96,7 +104,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const dialogKey = useRef(0);
   const dialogResult = useRef<((ok: boolean) => void) | null>(null);
   const levelRef = useRef(0);
-  const audioRef = useRef<{ context: AudioContext; frame: number } | null>(null);
+  const audioRef = useRef<{ context: AudioContext; frame: number; stream?: MediaStream } | null>(null);
+  const meterYielded = useRef(false);
+  const meterStarting = useRef(false);
+  const meterContext = useRef<AudioContext | null>(null);
+  const heardAt = useRef(0);
   const toastId = useRef(0);
 
   const toast = useCallback((text: string, options?: { icon?: string; action?: ToastAction }) => {
@@ -155,10 +167,101 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const audio = audioRef.current;
     if (!audio) return;
     cancelAnimationFrame(audio.frame);
+    audio.stream?.getTracks().forEach((track) => track.stop());
     void audio.context.close();
     audioRef.current = null;
     levelRef.current = 0;
   }, []);
+
+  const closeMeterContext = useCallback(() => {
+    const context = meterContext.current;
+    meterContext.current = null;
+    if (context && context.state !== 'closed') void context.close();
+  }, []);
+
+  const releaseVoiceMeter = useCallback(() => {
+    const had = Boolean(audioRef.current?.stream);
+    if (had) meterYielded.current = true;
+    meterStarting.current = false;
+    stopAudio();
+    closeMeterContext();
+    return had;
+  }, [stopAudio, closeMeterContext]);
+
+  const markDictationHeard = useCallback(() => {
+    heardAt.current = performance.now();
+  }, []);
+
+  const startVoiceMeter = useCallback(() => {
+    if (!dictatingRef.current || meterYielded.current || audioRef.current || meterStarting.current) return;
+    meterStarting.current = true;
+    void (async () => {
+      if (!dictatingRef.current || meterYielded.current || audioRef.current) {
+        meterStarting.current = false;
+        return;
+      }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
+          video: false,
+        });
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        } catch {
+          meterStarting.current = false;
+          return;
+        }
+      }
+      if (!dictatingRef.current || meterYielded.current || audioRef.current) {
+        meterStarting.current = false;
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const context = meterContext.current ?? new AudioContext({ latencyHint: 'interactive' });
+      meterContext.current = null;
+      await context.resume().catch(() => undefined);
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0;
+      context.createMediaStreamSource(stream).connect(analyser);
+      const data = new Float32Array(analyser.fftSize);
+      let last = performance.now();
+      let envelope = 0;
+      let loudFor = 0;
+      heardAt.current = performance.now();
+      const pump = (now: number) => {
+        if (!dictatingRef.current || meterYielded.current) {
+          stopAudio();
+          return;
+        }
+        analyser.getFloatTimeDomainData(data);
+        let sum = 0;
+        for (const sample of data) sum += sample * sample;
+        const rms = Math.sqrt(sum / data.length);
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+        const target = Math.min(1, Math.max(0, rms - 0.01) * 7);
+        const tau = target > envelope ? 0.018 : 0.05;
+        envelope += (target - envelope) * (1 - Math.exp(-dt / tau));
+        levelRef.current = envelope;
+        if (rms > 0.04) loudFor += dt;
+        else loudFor = 0;
+        if (loudFor > 2.2 && now - heardAt.current > 2200) {
+          meterYielded.current = true;
+          stopAudio();
+          window.dispatchEvent(new Event('aura-meter-yield'));
+          return;
+        }
+        const frame = requestAnimationFrame(pump);
+        if (audioRef.current) audioRef.current.frame = frame;
+      };
+      audioRef.current = { context, frame: 0, stream };
+      meterStarting.current = false;
+      pump(performance.now());
+    })();
+  }, [stopAudio]);
 
   const stopKind = useCallback(
     (kind: Sensor) => {
@@ -179,9 +282,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       });
     });
     stopAudio();
+    closeMeterContext();
     setStreams(EMPTY_STREAMS);
+    dictatingRef.current = false;
+    setDictating(false);
+    meterYielded.current = false;
+    meterStarting.current = false;
     setAura('idle');
-  }, [stopAudio]);
+  }, [stopAudio, closeMeterContext]);
 
   const toggleSensor = useCallback(
     async (kind: Sensor): Promise<SensorResult> => {
@@ -203,7 +311,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               current[kind]?.getTracks().forEach((item) => item.stop());
               const next = { ...current, [kind]: null };
               const visionStillOn = Boolean(next.cam || next.screen);
-              if (kind === 'mic' || !visionStillOn) setAura('idle');
+              if (kind === 'mic') {
+                if (!dictatingRef.current) setAura('idle');
+              } else if (!visionStillOn) setAura('idle');
               return next;
             });
             if (kind === 'mic') stopAudio();
@@ -340,6 +450,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [account, accountKnown]);
   const pending = taskPending;
+  const toggleDictation = useCallback(() => {
+    const next = !dictatingRef.current;
+    dictatingRef.current = next;
+    setDictating(next);
+    if (next) {
+      setStreams((current) => {
+        current.mic?.getTracks().forEach((track) => track.stop());
+        return current.mic ? { ...current, mic: null } : current;
+      });
+      stopAudio();
+      closeMeterContext();
+      meterYielded.current = false;
+      meterStarting.current = false;
+      heardAt.current = performance.now();
+      const context = new AudioContext({ latencyHint: 'interactive' });
+      void context.resume();
+      meterContext.current = context;
+      setAura('listening');
+    } else {
+      stopAudio();
+      closeMeterContext();
+      meterYielded.current = false;
+      meterStarting.current = false;
+      setAura((current) => (current === 'listening' ? 'idle' : current));
+    }
+  }, [stopAudio, closeMeterContext]);
+
   const sensing = {
     mic: Boolean(streams.mic),
     cam: Boolean(streams.cam),
@@ -354,8 +491,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAura,
       streams,
       sensing,
+      dictating,
       levelRef,
       toggleSensor,
+      toggleDictation,
+      startVoiceMeter,
+      releaseVoiceMeter,
+      markDictationHeard,
       stopSensing,
       ollamaReady,
       ollamaModels,
@@ -387,7 +529,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       aura,
       streams,
       sensing,
+      dictating,
       toggleSensor,
+      toggleDictation,
+      startVoiceMeter,
+      releaseVoiceMeter,
+      markDictationHeard,
       stopSensing,
       ollamaReady,
       ollamaModels,

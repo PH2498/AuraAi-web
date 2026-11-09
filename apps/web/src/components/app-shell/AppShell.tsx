@@ -29,8 +29,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     settings,
     aura,
     sensing,
+    dictating,
     stopSensing,
-    toggleSensor,
+    toggleDictation,
     pending,
     ollamaReady,
     levelRef,
@@ -48,7 +49,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const reduced = settings.motion === 'reduce' || (settings.motion !== 'full' && systemReduced);
   const connected = ollamaReady && settings.model === 'local';
   const [indicator, setIndicator] = useState({ x: 0, width: 0, visible: page !== 'settings' });
-  const sensingOn = sensing.mic || sensing.cam || sensing.screen;
+  const sensingOn = dictating || sensing.mic || sensing.cam || sensing.screen;
   document.body.dataset.page = page;
   document.body.dataset.os = os;
   document.body.dataset.state = aura;
@@ -145,7 +146,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     const onAlt = (event: KeyboardEvent) => {
       if (event.altKey && event.code === 'Space') {
         event.preventDefault();
-        void toggleSensor('mic');
+        if (page === 'home' || page === 'conversations') toggleDictation();
+        else toast('语音输入在首页和对话页。');
       }
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       if (document.querySelector('.scrim.open, .menu.open')) return;
@@ -159,7 +161,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         closeConversationPopovers();
         return;
       }
-      if (sensing.mic || sensing.cam || sensing.screen) {
+      if (dictating || sensing.mic || sensing.cam || sensing.screen) {
         event.preventDefault();
         stopSensing();
         toast('已停止全部感知');
@@ -174,7 +176,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   }, [
     navigate,
     stopSensing,
-    toggleSensor,
+    toggleDictation,
+    dictating,
     page,
     drawerOpen,
     setDrawerOpen,
@@ -254,7 +257,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
         <div className="tb-right">
           <div className="sensing" role="status" aria-live="polite">
-            <span className="pill sense-mic" hidden={!sensing.mic}>
+            <span className="pill sense-mic" hidden={!sensing.mic && !dictating}>
               <span className="dot" />
               麦克风
             </span>

@@ -5,13 +5,15 @@ import { useCore, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { EmptyState } from '../components/empty-state';
 import { Icon } from '../components/icon';
 import { analyzeFrame, captureFrame, fetchSpeech } from '../vision/api';
+import { playAnalyzeStart, startAnalyzeBed, stopAnalyzeBed } from '../vision/cues';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 
 export function VisionPage() {
-  const { aura, streams, sensing, toggleSensor, setAura, settings, requireAccount, confirm, toast } = useSession();
+  const { streams, sensing, toggleSensor, setAura, settings, requireAccount, confirm, toast } = useSession();
   const core = useCore();
   const cloudAllowed = useRef(false);
   const speakGen = useRef(0);
+  const liveRef = useRef(false);
   const slot = useCoreSlot<HTMLButtonElement>(true);
   const [source, setSource] = useState<'camera' | 'screen'>('camera');
   const [message, setMessage] = useState('画面只在你开启后采集。点「分析这一帧」才会上传这一帧，原图不会保存。');
@@ -19,8 +21,10 @@ export function VisionPage() {
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [result, setResult] = useState<VisionAnalyzeResult | null>(null);
+  const [phase, setPhase] = useState<'ready' | 'looking' | 'speaking' | 'done'>('ready');
   const stream = source === 'camera' ? streams.cam : streams.screen;
   const live = Boolean(stream);
+  liveRef.current = live;
   const blocked = !live && (message.includes('被拒绝') || message.includes('不支持'));
   const camera = source === 'camera';
 
@@ -42,70 +46,55 @@ export function VisionPage() {
     return () => {
       speakGen.current += 1;
       stopSpeech();
+      stopAnalyzeBed();
       window.speechSynthesis?.cancel();
       core.setAmplitude(0);
       core.setTicks(0, 0);
     };
   }, [core]);
 
-  const finishSpeaking = (generation: number) => {
+  const settle = (generation: number) => {
     if (generation !== speakGen.current) return;
     core.setAmplitude(0);
     core.setTicks(0, 0);
-    setAura(stream ? 'vision' : 'idle');
+    core.pulse();
+    setAura(liveRef.current ? 'vision' : 'idle');
+    setPhase('done');
+    setMessage(liveRef.current ? '还在看画面。原图没有保存。' : '这一帧已经说完。原图没有保存。');
   };
 
   const speak = (text: string) => {
     const generation = ++speakGen.current;
     const spoken = text.trim();
     if (!spoken) {
-      finishSpeaking(generation);
+      stopAnalyzeBed();
+      settle(generation);
       return;
     }
     stopSpeech();
     window.speechSynthesis?.cancel();
-    setAura('speaking');
-    core.setAmplitude(0.45);
-    let frame = 0;
-    const pump = () => {
-      if (generation !== speakGen.current) return;
-      core.setAmplitude(0.28 + 0.42 * (0.5 + 0.5 * Math.sin(performance.now() / 140)));
-      frame = window.requestAnimationFrame(pump);
-    };
-    pump();
-    const stopPump = () => window.cancelAnimationFrame(frame);
+    setPhase('looking');
+    setAura('thinking');
+    core.setAmplitude(0);
+    core.setTicks(2, 1);
+    setMessage('在组织要说的话。');
     void fetchSpeech(spoken, settings.rate || 1)
       .then((bytes) => {
         if (generation !== speakGen.current) return;
-        return playWav(bytes);
+        stopAnalyzeBed();
+        setPhase('speaking');
+        setAura('speaking');
+        setMessage('正在说这一帧看到的。');
+        return playWav(bytes, (level) => {
+          if (generation === speakGen.current) core.setAmplitude(level);
+        });
       })
-      .then(() => {
-        stopPump();
-        finishSpeaking(generation);
-      })
+      .then(() => settle(generation))
       .catch(() => {
-        stopPump();
         if (generation !== speakGen.current) return;
-        pump();
-        const synth = window.speechSynthesis;
-        if (!synth) {
-          toast('这一帧的结论没有读出来', { icon: 'circle-alert' });
-          finishSpeaking(generation);
-          return;
-        }
-        const utter = new SpeechSynthesisUtterance(spoken);
-        utter.lang = 'zh-CN';
-        utter.rate = settings.rate || 1;
-        utter.volume = 1;
-        const voice = synth.getVoices().find((item) => item.lang.toLowerCase().startsWith('zh'));
-        if (voice) utter.voice = voice;
-        utter.onend = () => finishSpeaking(generation);
-        utter.onerror = () => {
-          toast('这一帧的结论没有读出来', { icon: 'circle-alert' });
-          finishSpeaking(generation);
-        };
-        synth.resume();
-        synth.speak(utter);
+        stopAnalyzeBed();
+        toast('这一帧的结论没有读出来', { icon: 'circle-alert' });
+        settle(generation);
       });
   };
 
@@ -145,17 +134,26 @@ export function VisionPage() {
       }
       if (settings.uploadAsk === 'always') cloudAllowed.current = true;
     }
+    speakGen.current += 1;
+    stopSpeech();
+    window.speechSynthesis?.cancel();
+    playAnalyzeStart();
+    startAnalyzeBed();
     setBusy(true);
+    setPhase('looking');
     setAura('thinking');
+    core.pulse();
+    core.setAmplitude(0);
     core.setTicks(2, 0);
-    const advance = window.setTimeout(() => core.setTicks(2, 1), 700);
-    setMessage('正在上传这一帧。原图不会保存。');
+    const advance = window.setTimeout(() => {
+      if (speakGen.current) core.setTicks(2, 1);
+    }, 700);
+    setMessage('正在看这一帧。原图不会保存。');
     try {
       const frame = await captureFrame(video);
       const provider = settings.visionModel === 'gpt' ? 'openai' : settings.visionModel === 'claude' ? 'anthropic' : 'ollama';
       const next = await analyzeFrame(frame, provider);
       setResult(next);
-      setMessage('这一帧已经分析完。原图没有保存。');
       const spoken = [next.summary, ...(next.details ?? [])].filter(Boolean).join('。');
       speak(spoken);
       const wait = Math.max(2, Number(settings.interval) || 2) * 1000;
@@ -163,9 +161,12 @@ export function VisionPage() {
       window.setTimeout(() => setCooldown(0), wait);
     } catch (error) {
       speakGen.current += 1;
+      stopSpeech();
+      stopAnalyzeBed();
       window.speechSynthesis?.cancel();
       core.setAmplitude(0);
       core.setTicks(0, 0);
+      setPhase('ready');
       setResult(null);
       setMessage(error instanceof Error ? error.message : '这一帧没有分析完');
       setAura('error');
@@ -195,10 +196,17 @@ export function VisionPage() {
             <span>只在点分析时上传这一帧 · 不保存原图</span>
           </span>
         </div>
-        <div className={`frame${live ? ' live' : ''}${source === 'camera' ? ' mirror' : ''}`}>
+        <div className={`frame${live ? ' live' : ''}${busy ? ' analyzing' : ''}${source === 'camera' ? ' mirror' : ''}`}>
           <div className="view">
             <video ref={setVideo} playsInline muted />
           </div>
+          <div className="brackets" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+          <div className="scan" aria-hidden="true" />
           <div className={`frame-state${live ? '' : ' on'}`}>
             {blocked ? (
               <EmptyState icon={camera ? 'video-off' : 'monitor-off'} title={message}>
@@ -251,14 +259,14 @@ export function VisionPage() {
           <div>
             <h1>AURA 看到的</h1>
             <p className="sub">
-              {busy ? '思考中 · 正在看这一帧' : aura === 'speaking' ? '正在说 · 这一帧的结论' : result ? '这一帧已经看完 · 原图没有保存' : live || sensing.cam || sensing.screen ? '观察中 · 还没有上传' : '待命 · 画面未开启'}
+              {phase === 'looking' ? '思考中 · 正在看这一帧' : phase === 'speaking' ? '正在说 · 这一帧的结论' : phase === 'done' ? (live ? '观察中' : '待命') : live || sensing.cam || sensing.screen ? '观察中 · 还没有上传' : '待命 · 画面未开启'}
             </p>
           </div>
         </div>
         <div className="ins-body">
           <div className="ins-copy scroll fade-edges">
             {result ? (
-              <article className="finding">
+              <article className="finding" key={result.id}>
                 <h2>{result.summary}</h2>
                 {result.details?.length ? (
                   <ul>

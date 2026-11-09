@@ -5,6 +5,8 @@ import { useCoreSlot } from '../components/aura-core/CoreProvider';
 import { Icon, Wordmark } from '../components/icon';
 import { MODELS, type ModelId, type WebSettings } from '../state/settings';
 import { listProviders, saveOpenAiKey } from '../chat/api';
+import { fetchSpeech } from '../vision/api';
+import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 
 const SECTIONS = [
   ['general', 'sliders-horizontal', '通用'],
@@ -30,17 +32,6 @@ const SHORTCUTS: [string, string[]][] = [
 ];
 
 type Section = (typeof SECTIONS)[number][0];
-
-function readMemories(): { pinned?: boolean }[] {
-  const raw = localStorage.getItem('aura-memories');
-  if (raw == null) return [];
-  try {
-    const stored = JSON.parse(raw) as { pinned?: boolean }[];
-    return Array.isArray(stored) ? stored : [];
-  } catch {
-    return [];
-  }
-}
 
 function gpuName() {
   try {
@@ -71,6 +62,7 @@ export function SettingsPage() {
     toast,
     account,
     logout,
+    requireAccount,
   } = useSession();
   const navigate = useNavigate();
   const [openaiKey, setOpenaiKey] = useState('');
@@ -89,7 +81,6 @@ export function SettingsPage() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
   const [perms, setPerms] = useState<Record<string, string>>({});
-  const [memories, setMemories] = useState(readMemories);
   const [preview, setPreview] = useState(false);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const [noHits, setNoHits] = useState(false);
@@ -118,12 +109,6 @@ export function SettingsPage() {
     load();
     window.speechSynthesis?.addEventListener('voiceschanged', load);
     return () => window.speechSynthesis?.removeEventListener('voiceschanged', load);
-  }, []);
-
-  useEffect(() => {
-    const sync = () => setMemories(readMemories());
-    window.addEventListener('aura-memories', sync);
-    return () => window.removeEventListener('aura-memories', sync);
   }, []);
 
   useEffect(() => {
@@ -373,7 +358,7 @@ export function SettingsPage() {
                 <option value="whisper">Whisper · 本地（未接入）</option>
               </Select>
             </Row>
-            <Row query={query} find="朗读 自动 语音提问" title="语音提问后自动朗读" desc="只对你用语音发起的那一轮生效。模型未接入时不会自动开口。">
+            <Row query={query} find="朗读 自动 语音提问" title="语音提问后自动朗读" desc="只对你用语音发出去的那一轮生效。读的是本机语音。">
               <Switch on={settings.autoRead} label="自动朗读" onClick={() => onChange({ autoRead: !settings.autoRead })} />
             </Row>
             <Row query={query} find="语速 朗读" title="语速" desc={`${settings.rate.toFixed(2)}×`}>
@@ -389,7 +374,7 @@ export function SettingsPage() {
                 onChange={(event) => onChange({ rate: Number(event.target.value) })}
               />
             </Row>
-            <Row query={query} find="声音 音色 tts" title="朗读声音" desc="使用系统里已安装的语音。">
+            <Row query={query} find="声音 音色 tts" title="朗读声音" desc="记下偏好。这一版实际朗读使用本机中文语音，还不会按这里的选择切换。">
               <Select value={settings.voice} label="朗读声音" onChange={(value) => onChange({ voice: value })}>
                 <option value="">系统默认</option>
                 {voices.map((item) => (
@@ -404,24 +389,21 @@ export function SettingsPage() {
                 <option value="">系统默认输出</option>
               </Select>
             </Row>
-            <Row query={query} find="试听 朗读 一句" title="试听朗读" desc="用当前语速读一句。这是浏览器语音，不是模型。">
+            <Row query={query} find="试听 朗读 一句" title="试听朗读" desc="用当前语速读一句。走本机语音，不是模型在说话。">
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => {
-                  const synth = window.speechSynthesis;
-                  if (!synth) {
-                    toast('这台浏览器不能朗读', { icon: 'circle-alert' });
-                    return;
-                  }
-                  synth.cancel();
-                  const utter = new SpeechSynthesisUtterance('你好，我是 AURA。这是浏览器朗读，模型还没有接入。');
-                  utter.lang = 'zh-CN';
-                  utter.rate = settings.rate;
-                  utter.voice = voices.find((item) => item.name === settings.voice) ?? null;
-                  utter.onend = () => setAura('idle');
+                  unlockSpeech();
+                  stopSpeech();
                   setAura('speaking');
-                  synth.speak(utter);
+                  void fetchSpeech('你好，我是 AURA。', settings.rate || 1)
+                    .then((bytes) => playWav(bytes))
+                    .then(() => setAura('idle'))
+                    .catch(() => {
+                      toast('这一句没有读出来', { icon: 'circle-alert' });
+                      setAura('idle');
+                    });
                 }}
               >
                 <Icon name="volume-2" />
@@ -534,13 +516,13 @@ export function SettingsPage() {
                 全部停止
               </button>
             </Row>
-            <Row query={query} find="导出 备份 数据" title="导出本地数据" desc="设置和记忆保存成 JSON。这里没有密钥可导出。">
+            <Row query={query} find="导出 备份 数据" title="导出本地数据" desc="导出这台浏览器里的设置。记忆留在账号里，这里没有密钥。">
               <button
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => {
                   const blob = new Blob(
-                    [JSON.stringify({ exportedAt: new Date().toISOString(), settings, memories: readMemories() }, null, 2)],
+                    [JSON.stringify({ exportedAt: new Date().toISOString(), settings }, null, 2)],
                     { type: 'application/json' },
                   );
                   const link = document.createElement('a');
@@ -572,17 +554,17 @@ export function SettingsPage() {
           <section id="sec-memory" hidden={!openSection('memory')}>
             <header>
               <h2>记忆</h2>
-              <p>记忆页列出演示条目和你手动添加的内容。</p>
+              <p>记忆记在当前账号里。待确认的不会进入对话。</p>
             </header>
-            <Row query={query} find="条数 记忆 统计" title="当前条目" desc={localStorage.getItem('aura-memories') == null ? '打开记忆页后会计入演示条目。' : `共 ${memories.length} 条，其中固定 ${memories.filter((item) => item.pinned).length} 条。`}>
+            <Row query={query} find="条数 记忆 统计" title="当前条目" desc="到记忆页查看、确认或删除。浏览器里不再保存一份演示记忆。">
               <NavLink className="btn btn-secondary" to="/memory">
                 打开记忆
               </NavLink>
             </Row>
-            <Row query={query} find="自动 学习 写入" title="对话后提议写入" desc="模型接入之前，不会自动提议写入。">
+            <Row query={query} find="自动 学习 写入" title="对话后提议写入" desc="当你说出「记住」或「以后」时，会放进待确认。确认前不会进入对话。">
               <Switch on={settings.memoryAuto} label="对话后提议写入" onClick={() => onChange({ memoryAuto: !settings.memoryAuto })} />
             </Row>
-            <Row query={query} find="保留 期限 过期" title="保留期限" desc="固定的条目不受期限影响。">
+            <Row query={query} find="保留 期限 过期" title="保留期限" desc="还不会按这个期限自动删除。条目会留到你自己删掉。">
               <Select value={settings.retention} label="保留期限" onChange={(value) => onChange({ retention: value as WebSettings['retention'] })}>
                 <option value="30">30 天</option>
                 <option value="90">90 天</option>
@@ -590,16 +572,15 @@ export function SettingsPage() {
                 <option value="keep">一直保留</option>
               </Select>
             </Row>
-            <Row query={query} find="清空 删除 未固定" title="清空未固定的记忆" desc="固定的条目会留下。可以撤销。">
+            <Row query={query} find="清空 删除 未固定" title="清空未固定的记忆" desc="固定的条目会留下。删掉的不会再进入对话。">
               <button
                 type="button"
                 className="btn btn-secondary btn-warn"
                 onClick={() => {
-                  const before = readMemories();
                   void confirm({
-                    risk: '未固定的条目会从这台浏览器上消失',
+                    risk: '未固定的条目会从账号里消失',
                     title: '清空未固定的记忆？',
-                    desc: '固定的条目会留下。可以在提示里撤销。',
+                    desc: '固定的条目会留下。',
                     rows: [
                       ['brain', '会删除', '所有未固定的记忆'],
                       ['pin', '会留下', '你标记为固定的条目'],
@@ -607,21 +588,13 @@ export function SettingsPage() {
                     deny: '取消',
                     allow: '清空',
                     danger: true,
-                  }).then((ok) => {
+                  }).then(async (ok) => {
                     if (!ok) return;
-                    const kept = before.filter((item) => item.pinned);
-                    localStorage.setItem('aura-memories', JSON.stringify(kept));
-                    window.dispatchEvent(new Event('aura-memories'));
-                    toast('已清空未固定的记忆', {
-                      icon: 'trash-2',
-                      action: {
-                        label: '撤销',
-                        run: () => {
-                          localStorage.setItem('aura-memories', JSON.stringify(before));
-                          window.dispatchEvent(new Event('aura-memories'));
-                        },
-                      },
-                    });
+                    if (!(await requireAccount())) return;
+                    const { listMemories, deleteMemory } = await import('../memory/api');
+                    const rows = await listMemories().catch(() => []);
+                    await Promise.all(rows.filter((item) => !item.pinned).map((item) => deleteMemory(item.id).catch(() => undefined)));
+                    toast('已清空未固定的记忆', { icon: 'trash-2' });
                   });
                 }}
               >
@@ -755,7 +728,7 @@ export function SettingsPage() {
                 <span className="status-line">未登录</span>
               )}
             </Row>
-            <Row query={query} find="版本 build" title="版本" desc="界面来自 v2 设计稿。任务和记忆里的示例仍标成演示。">
+            <Row query={query} find="版本 build" title="版本" desc="界面来自 v2 设计稿。任务里的示例仍标成演示。记忆记在账号里。">
               <span className="num status-line">2026.11</span>
             </Row>
             <Row query={query} find="字体 geist 许可" title="字体" desc="Geist / Geist Mono，SIL Open Font License 1.1。">

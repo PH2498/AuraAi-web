@@ -10,7 +10,9 @@ import { AuditModule } from './modules/audit/audit.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { HealthModule } from './modules/health/health.module';
 import { ProvidersModule } from './modules/providers/providers.module';
+import { MemoryModule } from './modules/memory/memory.module';
 import { VisionModule } from './modules/vision/vision.module';
+import { VoiceModule } from './modules/voice/voice.module';
 
 @Module({
   imports: [
@@ -52,6 +54,8 @@ import { VisionModule } from './modules/vision/vision.module';
     ConversationsModule,
     ProvidersModule,
     VisionModule,
+    VoiceModule,
+    MemoryModule,
   ],
 })
 export class AppModule {}

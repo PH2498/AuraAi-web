@@ -9,6 +9,7 @@ import { conversations, messages, providerConfigs } from '../../database/schema'
 import { ENV } from '../../config/config.module';
 import type { AppEnv } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
+import { activeMemoryLines } from '../memory/memory.service';
 import { OllamaAdapter } from './ollama.adapter';
 import { OpenAiAdapter } from './openai.adapter';
 import type { ChatMessage, ModelProvider } from './provider';
@@ -110,8 +111,9 @@ export class AiService {
       },
     ]);
 
+    const remembered = await activeMemoryLines(this.database, userId);
     const prior: ChatMessage[] = [
-      { role: 'system', content: '你是 AURA。用中文简洁回答。不要声称已经操作了用户的电脑、邮件或日历。' },
+      { role: 'system', content: `你是 AURA。用中文简洁回答。不要声称已经操作了用户的电脑、邮件或日历。${remembered}` },
       ...history
         .filter((item) => item.status === 'complete' && (item.role === 'user' || item.role === 'assistant') && item.content.text)
         .map((item) => ({ role: item.role as 'user' | 'assistant', content: item.content.text })),

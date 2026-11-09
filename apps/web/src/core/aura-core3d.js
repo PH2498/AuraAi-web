@@ -620,10 +620,10 @@ export class AuraCore3D {
     this._trackFps(delta);
 
     const ease = (tau) => 1 - Math.exp(-rawDt / tau);
-    const a = ease(.3), af = ease(.07);
+    const a = ease(.3), af = ease(.07), lf = this.state === 'listening' ? ease(.02) : af;
     for (const key of SCALAR_KEYS) this.cur[key] += (this.tgt[key] - this.cur[key]) * a;
     for (const c of COLOR_KEYS) this.cc[c].lerp(this.ct[c], a);
-    this._lv = (this._lv || 0) + (this.level - (this._lv || 0)) * af;
+    this._lv = (this._lv || 0) + (this.level - (this._lv || 0)) * lf;
     this._am = (this._am || 0) + (this.amp - (this._am || 0)) * af;
     this._pg = (this._pg || 0) + (this.progress - (this._pg || 0)) * ease(.25);
     this.hover += (this.hoverT - this.hover) * ease(.2);

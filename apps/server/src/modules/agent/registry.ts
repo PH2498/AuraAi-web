@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { ToolRiskLevel } from '@aura/shared-types';
 import type { DatabaseService } from '../../database/database.service';
-import { conversations, notes } from '../../database/schema';
+import { conversations, memories, notes } from '../../database/schema';
 
 export type ToolContext = {
   userId: string;
@@ -58,12 +58,22 @@ const TOOLS: RegisteredTool[] = [
   },
   {
     name: 'list_memories',
-    description: '读取当前用户已经确认的记忆。长期记忆尚未接入时返回空列表。',
+    description: '读取当前用户已经确认的记忆。待确认的记忆不会返回。',
     riskLevel: 'low',
     requiresConfirmation: false,
     schema: empty,
-    async run() {
-      return { summary: '长期记忆还没有接入，这次没有读取到记忆。', items: [], available: false };
+    async run(_input, context) {
+      const rows = await context.database.db
+        .select({ id: memories.id, content: memories.content, category: memories.category })
+        .from(memories)
+        .where(and(eq(memories.userId, context.userId), eq(memories.status, 'active')))
+        .orderBy(desc(memories.pinned), desc(memories.updatedAt))
+        .limit(12);
+      return {
+        summary: rows.length ? `读取到 ${rows.length} 条已确认记忆` : '还没有已确认的记忆。待确认的不会出现在这里。',
+        items: rows,
+        available: true,
+      };
     },
   },
   {

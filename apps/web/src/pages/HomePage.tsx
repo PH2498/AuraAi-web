@@ -6,6 +6,9 @@ import { CommandBar } from '../components/command-input/CommandBar';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { ensureOllama, listConversations, streamReply, type ServerConversation } from '../chat/api';
+import { createMemory } from '../memory/api';
+import { fetchSpeech } from '../vision/api';
+import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 import { CONVERSATIONS, SUGGESTIONS } from '../fixtures/content';
 import { MODELS, STATE_LABEL } from '../state/settings';
 
@@ -26,7 +29,7 @@ function greeting() {
 }
 
 export function HomePage() {
-  const { aura, setAura, sensing, toggleSensor, settings, ollamaReady, ollamaModels, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
+  const { aura, setAura, sensing, dictating, toggleDictation, settings, ollamaReady, ollamaModels, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
   const [draft, setDraft] = useState('');
   const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean; stages: Stage[] } | null>(null);
   const [focused, setFocused] = useState(false);
@@ -38,7 +41,7 @@ export function HomePage() {
   const stopRef = useRef<AbortController | null>(null);
   const core = useCore();
   const slot = useCoreSlot<HTMLButtonElement>(true);
-  const pointer = useCorePointer(() => void toggleSensor('mic'));
+  const pointer = useCorePointer(() => toggleDictation());
 
   const suggesting = focused && !draft && !reading;
   useEffect(() => {
@@ -74,7 +77,7 @@ export function HomePage() {
   const savedSessions = saved.filter((item) => !query || item.title.includes(query));
   const sessions = CONVERSATIONS.filter((item) => !query || item.title.includes(query) || item.excerpt.includes(query));
 
-  const submit = (text: string) => {
+  const submit = (text: string, speakAfter = false) => {
     const ask = text.trim();
     if (!ask || busy) return;
     setDraft('');
@@ -168,6 +171,20 @@ export function HomePage() {
         if (!started) beginReply();
         setReading((current) => (current && current.ask === ask ? { ...current, answer, settled: true } : current));
         setAura('idle');
+        if (speakAfter && answer.trim()) {
+          stopSpeech();
+          setAura('speaking');
+          void fetchSpeech(answer, settings.rate || 1)
+            .then((bytes) => playWav(bytes))
+            .then(() => setAura('idle'))
+            .catch(() => setAura('idle'));
+        }
+        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(ask)) {
+          void createMemory({ content: ask.slice(0, 240), category: 'learned', sourceType: 'conversation', title: ask.slice(0, 40) }).then(
+            () => toast('已放进待确认。确认前不会用于对话。'),
+            () => undefined,
+          );
+        }
       } catch (error) {
         if (frame) window.cancelAnimationFrame(frame);
         const message = error instanceof Error ? error.message : '模型服务暂时不可用';
@@ -322,6 +339,27 @@ export function HomePage() {
                   >
                     <Icon name="copy" />
                   </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn-sm"
+                    aria-label="朗读回复"
+                    onClick={() => {
+                      const text = reading.answer.trim();
+                      if (!text) return;
+                      unlockSpeech();
+                      stopSpeech();
+                      setAura('speaking');
+                      void fetchSpeech(text, settings.rate || 1)
+                        .then((bytes) => playWav(bytes))
+                        .then(() => setAura('idle'))
+                        .catch(() => {
+                          toast('这一句没有读出来', { icon: 'circle-alert' });
+                          setAura('idle');
+                        });
+                    }}
+                  >
+                    <Icon name="volume-2" />
+                  </button>
                 </div>
               </div>
             </article>
@@ -331,7 +369,13 @@ export function HomePage() {
 
       <section className="dock">
         <div onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}>
-          <CommandBar value={draft} onChange={setDraft} busy={busy} onStop={stop} onSubmit={() => submit(draft)} />
+          <CommandBar
+            value={draft}
+            onChange={setDraft}
+            busy={busy}
+            onStop={stop}
+            onSubmit={() => submit(draft, settings.autoRead)}
+          />
         </div>
         <div className="dock-foot">
           <div className="foot-row" id="recentRow">
@@ -361,7 +405,7 @@ export function HomePage() {
           </div>
           <p className="hint warn">
             <Icon name="triangle-alert" className="i i-14" />
-            <span>{ollamaReady ? '对话发给本机 Ollama。任务和记忆仍是演示。' : 'Ollama 未连通。任务和记忆仍是演示。'}</span>
+            <span>{ollamaReady ? '对话发给本机 Ollama。记忆记在账号里，待确认的不会进入对话。' : 'Ollama 未连通。记忆记在账号里，待确认的不会进入对话。'}</span>
           </p>
         </div>
       </section>
@@ -371,9 +415,9 @@ export function HomePage() {
           <span>感知</span>
           <span className="tick" />
         </div>
-        <span className="sensor sense-mic" data-on={sensing.mic}>
+        <span className="sensor sense-mic" data-on={sensing.mic || dictating}>
           <Icon name="mic" />
-          <span>麦克风 {sensing.mic ? '开启' : '未开启'}</span>
+          <span>麦克风 {sensing.mic || dictating ? '开启' : '未开启'}</span>
         </span>
         <span className="sensor sense-cam" data-on={sensing.cam}>
           <Icon name="camera" />

@@ -3,17 +3,27 @@ import { useSession } from '../app/session';
 import { useCoreSlot } from '../components/aura-core/CoreProvider';
 import { EmptyState } from '../components/empty-state';
 import { Icon } from '../components/icon';
-import { MEMORY_CATS, MEMORY_SEED, type MemoryItem } from '../fixtures/content';
+import { MEMORY_CATS, type MemoryItem } from '../fixtures/content';
+import { approveMemory, createMemory, deleteMemory, listMemories, updateMemory } from '../memory/api';
+import type { MemoryDto } from '@aura/shared-types';
 
-const KEY = 'aura-memories';
+const SOURCE: Record<MemoryDto['sourceType'], string> = {
+  manual: '你手动添加',
+  conversation: '对话提议',
+  agent: '任务提议',
+};
 
-function load(): MemoryItem[] {
-  try {
-    const stored = JSON.parse(localStorage.getItem(KEY) || 'null') as MemoryItem[] | null;
-    return Array.isArray(stored) ? stored : MEMORY_SEED;
-  } catch {
-    return MEMORY_SEED;
-  }
+function asItem(item: MemoryDto): MemoryItem & { status: MemoryDto['status'] } {
+  const updated = new Date(item.updatedAt);
+  return {
+    id: item.id,
+    cat: item.category,
+    text: item.content,
+    source: item.status === 'pending' ? `${SOURCE[item.sourceType]} · 待确认` : SOURCE[item.sourceType],
+    at: updated.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+    pinned: item.pinned,
+    status: item.status,
+  };
 }
 
 function highlight(text: string, query: string): ReactNode {
@@ -37,9 +47,9 @@ function highlight(text: string, query: string): ReactNode {
 }
 
 export function MemoryPage() {
-  const { confirm, toast } = useSession();
+  const { confirm, toast, requireAccount } = useSession();
   const slot = useCoreSlot<HTMLButtonElement>(true);
-  const [items, setItems] = useState<MemoryItem[]>(load);
+  const [items, setItems] = useState<(MemoryItem & { status: MemoryDto['status'] })[]>([]);
   const [query, setQuery] = useState('');
   const [sheet, setSheet] = useState<{ id: string | null; editing: boolean } | null>(null);
   const [draft, setDraft] = useState('');
@@ -52,15 +62,11 @@ export function MemoryPage() {
     return items.filter((item) => !q || `${item.text} ${item.source}`.toLowerCase().includes(q));
   }, [items, query]);
 
-  const save = (next: MemoryItem[]) => {
-    setItems(next);
-    localStorage.setItem(KEY, JSON.stringify(next));
-    window.dispatchEvent(new Event('aura-memories'));
+  const reload = () => {
+    void listMemories().then((rows) => setItems(rows.map(asItem))).catch(() => setItems([]));
   };
   useEffect(() => {
-    const sync = () => setItems(load());
-    window.addEventListener('aura-memories', sync);
-    return () => window.removeEventListener('aura-memories', sync);
+    reload();
   }, []);
   const current = sheet?.id ? items.find((item) => item.id === sheet.id) : undefined;
   const openCreate = () => {
@@ -102,14 +108,18 @@ export function MemoryPage() {
       draftRef.current?.focus();
       return;
     }
-    if (current) {
-      save(items.map((item) => (item.id === current.id ? { ...item, text, cat, pinned, at: '刚刚更新' } : item)));
-      toast('已更新这条记忆');
-    } else {
-      save([{ id: `m-${Date.now()}`, cat, text, source: '你手动添加', at: '刚刚', pinned }, ...items]);
-      toast('已添加');
-    }
-    closeSheet();
+    void (async () => {
+      if (!(await requireAccount())) return;
+      try {
+        if (current) await updateMemory(current.id, { content: text, category: cat, pinned, title: text.slice(0, 40) });
+        else await createMemory({ content: text, category: cat, pinned, sourceType: 'manual', title: text.slice(0, 40) });
+        toast(current ? '已更新这条记忆' : '已添加');
+        closeSheet();
+        reload();
+      } catch (error) {
+        toast(error instanceof Error ? error.message : '记忆没有保存');
+      }
+    })();
   };
 
   return (
@@ -118,7 +128,7 @@ export function MemoryPage() {
         <button ref={slot} className="core-slot" type="button" aria-hidden="true" tabIndex={-1} />
         <div className="ttl">
           <h1>记忆</h1>
-          <p className="sub">这些是设计演示条目，存在这台浏览器里。模型还不能自己写入记忆。</p>
+          <p className="sub">记在当前账号里。待确认的记忆要你点确认后，才会进入对话。</p>
         </div>
         <div className="acts">
           <div className="search">
@@ -150,11 +160,31 @@ export function MemoryPage() {
           >
             {query.trim()
               ? `没有内容或来源包含「${query.trim()}」。`
-              : '添加一条你希望 AURA 以后用到的偏好。它会显示在这里，而不是藏在模型里。'}
+              : '添加一条你希望 AURA 以后用到的偏好。确认过的才会进入对话。'}
           </EmptyState>
         ) : null}
+        {visible.some((item) => item.status === 'pending') ? (
+          <section className="group">
+            <h2>
+              待确认
+              <span>{visible.filter((item) => item.status === 'pending').length}</span>
+            </h2>
+            {visible
+              .filter((item) => item.status === 'pending')
+              .map((item) => (
+                <button key={item.id} type="button" className="mrow" data-status="pending" aria-current={sheet?.id === item.id} onClick={() => openView(item)}>
+                  <Icon name="pin" className="i pin" />
+                  <span className="tx">{highlight(item.text, query)}</span>
+                  <span className="meta">
+                    <span>{item.source}</span>
+                    <span>{item.at}</span>
+                  </span>
+                </button>
+              ))}
+          </section>
+        ) : null}
         {(Object.keys(MEMORY_CATS) as (keyof typeof MEMORY_CATS)[]).map((cat) => {
-          const group = visible.filter((item) => item.cat === cat);
+          const group = visible.filter((item) => item.cat === cat && item.status !== 'pending');
           if (!group.length) return null;
           return (
             <section key={cat} className="group">
@@ -278,31 +308,21 @@ export function MemoryPage() {
                         title: '删除这条记忆？',
                         desc: snapshot.text,
                         rows: [
-                          ['brain', '会删除', '这一条。它只存在这台浏览器里'],
-                          ['messages-square', '不会删除', '产生它的那次演示对话'],
+                          ['brain', '会删除', '这一条。删除后不再进入对话'],
+                          ['messages-square', '不会删除', '原来的对话记录'],
                         ],
                         deny: '取消',
                         allow: '删除',
                         danger: true,
                       }).then((ok) => {
                         if (!ok) return;
-                        save(items.filter((item) => item.id !== snapshot.id));
-                        closeSheet();
-                        toast('已删除', {
-                          icon: 'trash-2',
-                          action: {
-                            label: '撤销',
-                            run: () => {
-                              setItems((currentItems) => {
-                                const restored = [snapshot, ...currentItems.filter((item) => item.id !== snapshot.id)];
-                                localStorage.setItem(KEY, JSON.stringify(restored));
-                                window.dispatchEvent(new Event('aura-memories'));
-                                return restored;
-                              });
-                              setSheet({ id: snapshot.id, editing: false });
-                            },
-                          },
-                        });
+                        void deleteMemory(snapshot.id)
+                          .then(() => {
+                            closeSheet();
+                            toast('已删除');
+                            reload();
+                          })
+                          .catch((error: unknown) => toast(error instanceof Error ? error.message : '没有删除'));
                       });
                     }}
                   >
@@ -310,6 +330,23 @@ export function MemoryPage() {
                     删除
                   </button>
                   <span className="grow" />
+                  {current.status === 'pending' ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => {
+                        void approveMemory(current.id)
+                          .then(() => {
+                            toast('已确认。之后的对话可以引用它。');
+                            closeSheet();
+                            reload();
+                          })
+                          .catch((error: unknown) => toast(error instanceof Error ? error.message : '没有确认'));
+                      }}
+                    >
+                      确认
+                    </button>
+                  ) : null}
                   <button type="button" className="btn btn-secondary" onClick={() => openEdit(current)}>
                     <Icon name="pencil" className="i i-14" />
                     编辑

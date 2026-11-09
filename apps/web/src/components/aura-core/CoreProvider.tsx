@@ -104,6 +104,7 @@ export function CoreProvider({
     let observed: HTMLElement | null = null;
     let veil: HTMLElement | null = null;
     let veilKey = '';
+    let cmd: HTMLElement | null = null;
     const invalidate = () => {
       placed = false;
     };
@@ -162,7 +163,10 @@ export function CoreProvider({
         }
         placed = true;
       }
-      core.setLevel(levelHolder.current?.current ?? 0);
+      const level = levelHolder.current?.current ?? 0;
+      core.setLevel(level);
+      if (!cmd?.isConnected) cmd = document.querySelector<HTMLElement>('.cmd');
+      cmd?.style.setProperty('--level', level.toFixed(3));
       const center = core.center();
       const key = `${Math.round(center.x)}:${Math.round(center.y)}:${Math.round(center.r)}`;
       if (key === veilKey) return;
