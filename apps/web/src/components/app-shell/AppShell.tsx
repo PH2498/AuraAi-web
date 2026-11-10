@@ -34,6 +34,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     stopSensing,
     toggleDictation,
     pending,
+    memoryPending,
     ollamaReady,
     ollamaModels,
     endpoints,
@@ -87,7 +88,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     place();
     window.addEventListener('resize', place);
     return () => window.removeEventListener('resize', place);
-  }, [page, location.pathname]);
+  }, [page, location.pathname, pending, memoryPending]);
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
@@ -254,6 +255,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               {item.page === 'tasks' && pending > 0 ? (
                 <span className="nav-badge" aria-label={`${pending} 项等待确认`}>
                   {pending}
+                </span>
+              ) : null}
+              {item.page === 'memory' && memoryPending > 0 ? (
+                <span className="nav-badge" aria-label={`${memoryPending} 条待确认`}>
+                  {memoryPending}
                 </span>
               ) : null}
             </NavLink>

@@ -15,6 +15,7 @@ import { LoginDialog } from '../components/login-dialog';
 import { currentAccount, listProviders, loginAccount, logoutAccount, refreshOllama, testProvider, type Account } from '../chat/api';
 import { isVisionModelName, localRef, type CloudEndpoint, type CloudProbe } from '../state/models';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
+import { listMemories } from '../memory/api';
 import { listTasks } from '../tasks/api';
 
 const platform = createWebPlatform();
@@ -55,6 +56,7 @@ type Session = {
   logout: () => Promise<void>;
   probeOllama: (url: string) => Promise<string>;
   pending: number;
+  memoryPending: number;
   dismissed: string[];
   dismissTask: (id: string) => void;
   drawerOpen: boolean;
@@ -527,6 +529,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [account, accountKnown]);
   const pending = taskPending;
+  const [memoryPending, setMemoryPending] = useState(0);
+  useEffect(() => {
+    if (!accountKnown) return;
+    if (!account) {
+      setMemoryPending(0);
+      return;
+    }
+    let stop = false;
+    let timer = 0;
+    const pull = () => {
+      void listMemories()
+        .then((rows) => {
+          if (!stop) setMemoryPending(rows.filter((item) => item.status === 'pending').length);
+        })
+        .catch(() => undefined);
+    };
+    const soon = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(pull, 40);
+    };
+    pull();
+    const interval = window.setInterval(pull, 5000);
+    window.addEventListener('aura-memories', soon);
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+      window.removeEventListener('aura-memories', soon);
+    };
+  }, [account, accountKnown]);
   const toggleDictation = useCallback(() => {
     const next = !dictatingRef.current;
     dictatingRef.current = next;
@@ -588,6 +620,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       logout,
       probeOllama,
       pending,
+      memoryPending,
       dismissed,
       dismissTask,
       drawerOpen,
@@ -629,6 +662,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       logout,
       probeOllama,
       pending,
+      memoryPending,
       dismissed,
       dismissTask,
       drawerOpen,

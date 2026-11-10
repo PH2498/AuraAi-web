@@ -56,13 +56,15 @@ export function HomePage() {
   const pointer = useCorePointer(() => toggleDictation());
 
   const suggesting = focused && !draft && !session;
+  const openingPreview =
+    session?.turns.length === 1 && !session.turns[0]?.answer && stages.some((item) => item.status === 'active' || item.status === 'pending');
   useEffect(() => {
-    document.body.classList.toggle('reading', Boolean(session));
+    document.body.classList.toggle('reading', Boolean(session) && !openingPreview);
     document.body.classList.toggle('suggesting', suggesting);
     return () => {
       document.body.classList.remove('reading', 'suggesting');
     };
-  }, [session, suggesting]);
+  }, [session, suggesting, openingPreview]);
   useEffect(() => {
     const clear = () => {
       conversationId.current = null;
@@ -132,17 +134,20 @@ export function HomePage() {
       }
       const cloud = target.cloud;
       const model = target.model;
+      const opening = conversationId.current == null;
       const turnKey = `turn-${Date.now()}`;
       const controller = new AbortController();
       stopRef.current = controller;
       setBusy(true);
       setNotice(null);
       setAura('thinking');
-      core.setTicks(2, 0);
-      setStages([
-        { id: 'intent', label: '理解意图', status: 'active' },
-        { id: 'answer', label: '组织回答', status: 'pending' },
-      ]);
+      core.setTicks(opening ? 2 : 0, 0);
+      if (opening) {
+        setStages([
+          { id: 'intent', label: '理解意图', status: 'active' },
+          { id: 'answer', label: '组织回答', status: 'pending' },
+        ]);
+      }
       setSession((current) => ({
         when: current?.when ?? stamp.when,
         turns: [...(current?.turns ?? []), { key: turnKey, ask, answer: '', at: stamp.at, settled: false, stages: THINKING.map((item) => ({ ...item })) }],
@@ -171,20 +176,22 @@ export function HomePage() {
         started = true;
         const done = THINKING.map((item) => ({ ...item, status: 'done' as const }));
         setStages([]);
-        core.setTicks(2, 2);
+        if (opening) core.setTicks(2, 2);
         setNotice(null);
         patchTurn(turnKey, { stages: done });
         setAura('speaking');
         core.setAmplitude(0.45);
       };
       try {
-        await Promise.all([cloud ? Promise.resolve() : ensureOllama(settings.ollamaUrl, model), wait(700)]);
+        await Promise.all([cloud ? Promise.resolve() : ensureOllama(settings.ollamaUrl, model), opening ? wait(700) : Promise.resolve()]);
         if (controller.signal.aborted) return;
-        setStages([
-          { id: 'intent', label: '理解意图', status: 'done' },
-          { id: 'answer', label: '组织回答', status: 'active' },
-        ]);
-        core.setTicks(2, 1);
+        if (opening) {
+          setStages([
+            { id: 'intent', label: '理解意图', status: 'done' },
+            { id: 'answer', label: '组织回答', status: 'active' },
+          ]);
+          core.setTicks(2, 1);
+        }
         await streamReply(
           { message: ask, conversationId: conversationId.current ?? undefined, provider: target.provider, providerId: target.providerId, model },
           {
