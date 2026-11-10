@@ -1,6 +1,6 @@
 # AURA AI
 
-Web-first 全栈工程。Phase 1 骨架和 Phase 2 Presence 界面已经在页面上。还没有接模型，也没有 Electron。下次开工先读 `docs/PROGRESS.md`。
+Web-first 全栈工程。当前到 Phase 8：本机对话、任务、单帧视觉、记忆、语音、试用反馈和部署骨架都已接上。不做 Electron。下次开工先读 `docs/PROGRESS.md`。
 
 设计基准在仓库外，只读：`../设计资源/AURA-AI`（v2「Presence」）。开发文档在 `../开发文档/AURA_AI_Cursor_Development`。
 
@@ -35,6 +35,25 @@ corepack pnpm dev
 corepack pnpm lint
 corepack pnpm typecheck
 corepack pnpm test
+corepack pnpm build
+corepack pnpm db:verify-backup
 ```
 
-密钥只放在服务端 `.env`。`.env` 不提交。`.env.example` 只有占位值。
+`db:verify-backup` 会用当前 `DATABASE_URL` 做一次临时导出，确认清单里有 `users` 和 `feedback`，然后删除临时文件。真正留档用 `corepack pnpm db:backup`。恢复会覆盖目标库：
+
+```bash
+DATABASE_URL=postgresql://... sh scripts/db-restore.sh backups/某次.dump
+```
+
+## 生产
+
+```bash
+export POSTGRES_PASSWORD='一段足够长的口令'
+export AUTH_SECRET='至少 24 位，且不是 replace-me'
+export ENCRYPTION_KEY='至少 32 位，且不含 placeholder'
+docker compose -f docker-compose.prod.yml up --build
+```
+
+网页经 Caddy 走 HTTPS。默认主机名是 `localhost`，证书是内部证书。公网域名把 `AURA_HOST` 设成该域名，并删掉 `deploy/Caddyfile` 里的 `tls internal`。生产环境拒绝占位密钥、星号跨域和开发库口令。Swagger 只在开发环境打开。日志是 JSON，写到标准输出，不记录 cookie、密码和反馈正文。
+
+配置项说明在 `.env.example`。密钥只放在服务端 `.env`。`.env` 不提交。`.env.example` 只有占位值。

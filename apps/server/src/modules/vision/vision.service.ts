@@ -15,7 +15,7 @@ export class VisionService {
     private readonly runtime: VisionRuntime,
   ) {}
 
-  async analyze(userId: string, input: { bytes: Buffer; prompt?: string; provider?: string }): Promise<VisionAnalyzeResult> {
+  async analyze(userId: string, input: { bytes: Buffer; prompt?: string; provider?: string; providerId?: string; model?: string }): Promise<VisionAnalyzeResult> {
     const kind = imageKind(input.bytes);
     if (!kind) fail(400, 'UNSUPPORTED_IMAGE', '这一帧不是 jpeg、png 或 webp，没有发出去。');
     if (input.bytes.length > MAX_IMAGE_BYTES) fail(413, 'IMAGE_TOO_LARGE', '这一帧超过 5MB，没有发出去。');
@@ -24,14 +24,20 @@ export class VisionService {
     recent.set(userId, now);
 
     const provider = input.provider === 'openai' || input.provider === 'anthropic' ? input.provider : 'ollama';
-    if (provider === 'anthropic') {
+    if (!input.providerId && provider === 'anthropic') {
       await this.audit.record({ userId, action: 'vision.analyze', resourceType: 'vision', metadata: { status: 'refused', bytes: input.bytes.length, mime: kind } });
-      fail(409, 'VISION_UNAVAILABLE', 'Claude 这一阶段还没有接入。这一帧没有发出去。');
+      fail(409, 'VISION_UNAVAILABLE', '这个接口还不能看图。这一帧没有发出去。');
     }
 
     const started = Date.now();
     try {
-      const result = await this.runtime.look(userId, provider, input.bytes, (input.prompt || DEFAULT_VISION_PROMPT).slice(0, 400), AbortSignal.timeout(45_000));
+      const result = await this.runtime.look(
+        userId,
+        { providerId: input.providerId, provider: input.providerId ? input.provider : provider, model: input.model },
+        input.bytes,
+        (input.prompt || DEFAULT_VISION_PROMPT).slice(0, 400),
+        AbortSignal.timeout(45_000),
+      );
       const lines = result.summary.split('\n').map((line) => line.trim()).filter(Boolean);
       await this.audit.record({
         userId,

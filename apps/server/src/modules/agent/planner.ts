@@ -72,11 +72,11 @@ export class ModelPlanner implements AgentPlanner {
 
   private async complete(userId: string, messages: { role: string; content: string }[], signal: AbortSignal, json: boolean): Promise<string> {
     const config = await this.config(userId);
-    if (!config) throw new Error('提供方还没有配置。请先保存 Ollama 地址，或在服务器保存 OpenAI 密钥。');
+    if (!config) throw new Error('还没有可用的模型。请接上本机 Ollama，或添加一个云端接口。');
     const timeout = AbortSignal.timeout(45_000);
     const combined = AbortSignal.any([signal, timeout]);
     if (config.provider === 'openai') {
-      if (!config.apiKey) throw new Error('OpenAI 密钥未配置。密钥只保存在服务器。');
+      if (!config.apiKey) throw new Error('这个云端接口还没有密钥。密钥只保存在服务器。');
       const response = await fetch(`${config.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },

@@ -1,0 +1,5 @@
+# 本地试用使用内部证书。公网域名上线时删掉 tls internal，让 Caddy 申请正式证书。
+{$AURA_HOST:localhost} {
+	tls internal
+	reverse_proxy web:80
+}

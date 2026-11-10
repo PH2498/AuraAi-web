@@ -10,6 +10,7 @@ import { deleteConversation, ensureOllama, listConversations, listMessages, rena
 import { createMemory } from '../memory/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
+import { describeChoice, resolveChat } from '../state/models';
 
 const FRESH_SUGGESTIONS: [string, string][] = [
   ['monitor', '总结我屏幕上的内容'],
@@ -22,7 +23,7 @@ type Thread = Omit<(typeof CONVERSATIONS)[number], 'id'> & { id: string; pinned:
 export function ConversationsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast, account, requireAccount, settings, ollamaModels, setAura, toggleDictation } = useSession();
+  const { conversation, contextExpanded, toggleConversationContext, closeConversationPopovers, confirm, toast, account, requireAccount, settings, ollamaModels, endpoints, noteCloudProbe, setAura, toggleDictation } = useSession();
   const [query, setQuery] = useState('');
   const [draft, setDraft] = useState('');
   const [note, setNote] = useState('');
@@ -180,13 +181,13 @@ export function ConversationsPage() {
         setDraft(ask);
         return;
       }
-      if (settings.model === 'claude') {
-        setDraft('');
-        setNote('Claude 这一阶段还没有接入。当前可以对话的是本机 Ollama。');
+      const target = resolveChat(settings, ollamaModels, endpoints);
+      if (!target.ok) {
+        setNote(target.message);
         return;
       }
-      const cloud = settings.model === 'gpt';
-      const model = cloud ? 'gpt-4o' : (ollamaModels.find((name) => name.startsWith('qwen2.5')) ?? ollamaModels[0] ?? 'qwen2.5:7b');
+      const cloud = target.cloud;
+      const model = target.model;
       setDraft('');
       const controller = new AbortController();
       stopRef.current = controller;
@@ -218,7 +219,7 @@ export function ConversationsPage() {
         if (!cloud) await ensureOllama(settings.ollamaUrl, model);
         core.setTicks(2, 1);
         await streamReply(
-          { message: ask, conversationId: live ? selectedId : undefined, provider: cloud ? 'openai' : 'ollama', model },
+          { message: ask, conversationId: live ? selectedId : undefined, provider: target.provider, providerId: target.providerId, model },
           {
             signal: controller.signal,
             onStart: (event) => {
@@ -235,6 +236,7 @@ export function ConversationsPage() {
         );
         if (frame) window.cancelAnimationFrame(frame);
         paint();
+        if (target.providerId) noteCloudProbe(target.providerId, 'ok');
         setAura('idle');
         if (speakAfter && answer.trim()) {
           stopSpeech();
@@ -260,7 +262,10 @@ export function ConversationsPage() {
         const message = controller.signal.aborted ? answer || '已停止生成' : error instanceof Error ? error.message : '模型服务暂时不可用';
         setHistory((items) => items.map((item) => (item.role === 'assistant' && !item.content.text ? { ...item, content: { text: message }, status: 'error' } : item)));
         setAura(controller.signal.aborted ? 'idle' : 'error');
-        if (!controller.signal.aborted) toast(message, { icon: 'circle-alert' });
+        if (!controller.signal.aborted) {
+          if (target.providerId) noteCloudProbe(target.providerId, 'fail');
+          toast(message, { icon: 'circle-alert' });
+        }
       } finally {
         stopRef.current = null;
         setBusy(false);
@@ -675,7 +680,7 @@ export function ConversationsPage() {
               <h3>隐私</h3>
               <p className="privacy">
                 <Icon name="shield-check" className="i i-14" />
-                <span>{live ? `这次对话发给${settings.model === 'gpt' ? ' OpenAI' : '本机 Ollama'}，并保存在你的账号里。没有调用工具，也没有读取记忆。` : '这次是演示会话，内容没有发给模型。'}</span>
+                <span>{live ? `这次对话发给${describeChoice(settings.chatModel, endpoints).where === '本地' ? '本机' : describeChoice(settings.chatModel, endpoints).where}的${describeChoice(settings.chatModel, endpoints).name}，并保存在你的账号里。没有调用工具，也没有读取记忆。` : '这次是演示会话，内容没有发给模型。'}</span>
               </p>
             </section>
           </>

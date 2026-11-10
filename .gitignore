@@ -7,3 +7,5 @@ coverage
 *.tsbuildinfo
 .vite
 .DS_Store
+backups
+*.dump

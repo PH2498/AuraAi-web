@@ -18,11 +18,11 @@ export class VisionController {
   @ApiConsumes('multipart/form-data')
   @ApiBody({ schema: { type: 'object', properties: { image: { type: 'string', format: 'binary' }, prompt: { type: 'string' }, provider: { type: 'string' } } } })
   @UseInterceptors(FileInterceptor('image', { limits: { fileSize: MAX_IMAGE_BYTES } }))
-  analyze(@Req() request: AuthedRequest, @UploadedFile() file: { buffer?: Buffer; size?: number } | undefined, @Body() body: { prompt?: string; provider?: string }) {
+  analyze(@Req() request: AuthedRequest, @UploadedFile() file: { buffer?: Buffer; size?: number } | undefined, @Body() body: { prompt?: string; provider?: string; providerId?: string; model?: string }) {
     const userId = request.user?.id;
     if (!userId) fail(401, 'UNAUTHORIZED', '未授权');
     if (!file?.buffer?.length) fail(400, 'IMAGE_REQUIRED', '没有收到画面。这一帧没有发出去。');
-    return this.vision.analyze(userId, { bytes: file.buffer, prompt: body?.prompt, provider: body?.provider });
+    return this.vision.analyze(userId, { bytes: file.buffer, prompt: body?.prompt, provider: body?.provider, providerId: body?.providerId, model: body?.model });
   }
 
   @Post('speak')

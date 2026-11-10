@@ -17,17 +17,7 @@ export const STATE_LABEL: Record<AuraState, string> = {
   error: '需要处理',
 };
 
-export type ModelId = 'local' | 'gpt' | 'claude';
 export type RunMode = 'local-first' | 'local-only' | 'cloud';
-
-export const MODELS: Record<
-  ModelId,
-  { name: string; provider: string; where: string; cloud: boolean; icon: string; caps: string[] }
-> = {
-  local: { name: 'Qwen2.5 7B', provider: 'Ollama', where: '本地', cloud: false, icon: 'hard-drive', caps: ['文本', '视觉', '工具'] },
-  gpt: { name: 'GPT-4o', provider: 'OpenAI', where: '云端', cloud: true, icon: 'cloud', caps: ['文本', '视觉', '语音', '工具'] },
-  claude: { name: 'Claude Sonnet 4', provider: 'Anthropic', where: '云端', cloud: true, icon: 'cloud', caps: ['文本', '视觉', '工具'] },
-};
 
 export type WebSettings = {
   os: 'auto' | 'mac' | 'win';
@@ -36,8 +26,8 @@ export type WebSettings = {
   dust: boolean;
   openOn: 'home' | 'conversations' | 'vision';
   runMode: RunMode;
-  model: ModelId;
-  visionModel: ModelId;
+  chatModel: string;
+  visionModel: string;
   ollamaUrl: string;
   stt: 'browser' | 'whisper';
   autoRead: boolean;
@@ -66,8 +56,8 @@ export const DEFAULT_SETTINGS: WebSettings = {
   dust: true,
   openOn: 'home',
   runMode: 'local-first',
-  model: 'local',
-  visionModel: 'local',
+  chatModel: '',
+  visionModel: '',
   ollamaUrl: 'http://127.0.0.1:11434',
   stt: 'browser',
   autoRead: false,
@@ -87,10 +77,18 @@ export const DEFAULT_SETTINGS: WebSettings = {
   autostart: true,
 };
 
+const LEGACY_MODELS = new Set(['local', 'gpt', 'claude']);
+
 export function loadSettings(): WebSettings {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}') as Partial<WebSettings>;
-    return { ...DEFAULT_SETTINGS, ...raw };
+    const next = { ...DEFAULT_SETTINGS };
+    (Object.keys(DEFAULT_SETTINGS) as (keyof WebSettings)[]).forEach((key) => {
+      if (raw[key] !== undefined) next[key] = raw[key] as never;
+    });
+    if (LEGACY_MODELS.has(next.chatModel)) next.chatModel = '';
+    if (LEGACY_MODELS.has(next.visionModel)) next.visionModel = '';
+    return next;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

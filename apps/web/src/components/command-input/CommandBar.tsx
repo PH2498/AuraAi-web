@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
-import { listProviders } from '../../chat/api';
-import { MODELS, type ModelId } from '../../state/settings';
+import { cloudItemStatus, cloudRef, describeChoice, localRef, parseModelRef } from '../../state/models';
 import { startBrowserRecognition } from '../../voice/recognition';
 import { Icon } from '../icon';
 
@@ -21,9 +20,8 @@ export function CommandBar({
   busy?: boolean;
   placeholder?: string;
 }) {
-  const { settings, updateSettings, ollamaReady, account, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, releaseVoiceMeter, markDictationHeard, toast } = useSession();
+  const { settings, updateSettings, ollamaReady, ollamaModels, endpoints, cloudProbes, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, releaseVoiceMeter, markDictationHeard, toast } = useSession();
   const [open, setOpen] = useState(false);
-  const [openaiReady, setOpenaiReady] = useState(false);
   const [finder, setFinder] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const stopDictation = useRef(toggleDictation);
@@ -40,7 +38,8 @@ export function CommandBar({
   const modelBtn = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
-  const current = MODELS[settings.model];
+  const current = describeChoice(settings.chatModel, endpoints);
+  const localOnly = settings.runMode === 'local-only';
   const listening = dictating;
 
   useEffect(() => {
@@ -117,25 +116,7 @@ export function CommandBar({
     const maxLeft = Math.max(8, host.clientWidth - width - 8);
     panel.style.width = `${width}px`;
     panel.style.left = `${Math.max(8, Math.min(trigger.offsetLeft, maxLeft))}px`;
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !account) {
-      setOpenaiReady(false);
-      return;
-    }
-    let cancelled = false;
-    void listProviders()
-      .then((rows) => {
-        if (!cancelled) setOpenaiReady(Boolean(rows.find((item) => item.provider === 'openai')?.keyConfigured));
-      })
-      .catch(() => {
-        if (!cancelled) setOpenaiReady(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, account]);
+  }, [open, ollamaModels.length, endpoints.length]);
 
   useEffect(() => {
     const node = video.current;
@@ -149,40 +130,9 @@ export function CommandBar({
     onSubmit(files);
   };
 
-  const modelItem = (id: ModelId) => {
-    const item = MODELS[id];
-    const blocked = item.cloud && settings.runMode === 'local-only';
-    const connected = id === 'local' && ollamaReady;
-    const label = blocked ? '仅本地模式' : connected ? '已连接' : id === 'gpt' && openaiReady ? '已保存密钥' : item.cloud ? '未配置 Key' : '未连通';
-    return (
-      <button
-        key={id}
-        type="button"
-        className="menu-item"
-        role="menuitemradio"
-        aria-checked={settings.model === id}
-        disabled={blocked}
-        onClick={() => {
-          updateSettings({ model: id });
-          setOpen(false);
-        }}
-      >
-        <Icon name={item.icon} />
-        <span>
-          {item.name}
-          <span className="sub">
-            {item.provider} · {item.caps.join(' / ')}
-          </span>
-        </span>
-        <span className="tail">
-          <span className={`pill${connected ? ' ok' : blocked ? '' : ' warn'}`}>
-            {blocked ? null : <span className="dot" />}
-            {label}
-          </span>
-          <Icon name="check" className="i check" />
-        </span>
-      </button>
-    );
+  const choose = (value: string) => {
+    updateSettings({ chatModel: value });
+    setOpen(false);
   };
 
   return (
@@ -294,11 +244,52 @@ export function CommandBar({
         </button>
       </div>
       <div ref={menu} className={`menu cmd-models${open ? ' open' : ''}`} id="modelMenu" role="menu" aria-label="选择模型" style={{ ['--origin' as string]: 'bottom left' }}>
-        <div className="menu-label">本地 · 不上传</div>
-        {modelItem('local')}
+        <div className="menu-label">本地</div>
+        {ollamaModels.length === 0 ? <p className="menu-empty">本机还没有列出模型</p> : null}
+        {ollamaModels.map((name) => {
+          const selected = settings.chatModel === localRef(name);
+          const ready = ollamaReady;
+          return (
+            <button key={name} type="button" className="menu-item" role="menuitemradio" aria-checked={selected} onClick={() => choose(localRef(name))}>
+              <Icon name="hard-drive" />
+              <span>
+                {name}
+                <span className="sub">本机 Ollama</span>
+              </span>
+              <span className="tail">
+                <span className={`pill${ready ? ' ok' : ' warn'}`}>
+                  <span className="dot" />
+                  {ready ? '已连接' : '未连通'}
+                </span>
+                <Icon name="check" className="i check" />
+              </span>
+            </button>
+          );
+        })}
         <div className="menu-label">云端</div>
-        {modelItem('gpt')}
-        {modelItem('claude')}
+        {endpoints.length === 0 ? <p className="menu-empty">还没有接入云端接口</p> : null}
+        {endpoints.map((item) => {
+          const parsed = parseModelRef(settings.chatModel);
+          const selected = parsed?.kind === 'cloud' && parsed.id === item.id;
+          const blocked = localOnly || !item.keyConfigured || !item.defaultModel;
+          const status = cloudItemStatus(item, localOnly, cloudProbes[item.id]);
+          return (
+            <button key={item.id} type="button" className="menu-item" role="menuitemradio" aria-checked={selected} disabled={blocked} onClick={() => choose(cloudRef(item.id))}>
+              <Icon name="cloud" />
+              <span>
+                {item.defaultModel || item.displayName}
+                <span className="sub">{item.displayName}</span>
+              </span>
+              <span className="tail">
+                <span className={`pill${status.tone === 'ok' ? ' ok' : status.tone === 'warn' ? ' warn' : ''}`}>
+                  {status.tone === 'muted' ? null : <span className="dot" />}
+                  {status.text}
+                </span>
+                <Icon name="check" className="i check" />
+              </span>
+            </button>
+          );
+        })}
         <hr />
         <Link className="menu-item" role="menuitem" to="/settings/models" onClick={() => setOpen(false)}>
           <Icon name="settings" />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseEnv } from './env';
+import { parseEnv, productionConfigError } from './env';
 
 const valid = {
   NODE_ENV: 'development',
@@ -39,5 +39,25 @@ describe('parseEnv', () => {
       expect(result.message).not.toContain('short');
       expect(result.message).not.toContain('aura_dev');
     }
+  });
+
+  it('rejects placeholder production secrets without repeating them', () => {
+    const parsed = parseEnv({
+      ...valid,
+      NODE_ENV: 'production',
+      AUTH_SECRET: 'replace-me',
+      ENCRYPTION_KEY: 'replace-with-32-byte-key-placeholder',
+      CORS_ORIGINS: '*',
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const message = productionConfigError(parsed.env);
+    expect(message).toContain('AUTH_SECRET');
+    expect(message).toContain('ENCRYPTION_KEY');
+    expect(message).toContain('CORS_ORIGINS');
+    expect(message).toContain('DATABASE_URL');
+    expect(message).not.toContain('replace-me');
+    expect(message).not.toContain('placeholder');
+    expect(message).not.toContain('aura_dev');
   });
 });

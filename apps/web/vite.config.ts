@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [
     {
       name: 'workspace-cjs',
+      apply: 'serve',
       enforce: 'pre',
       async transform(code, id) {
         const file = id.split('?')[0] ?? id;
@@ -29,6 +30,11 @@ export default defineConfig({
   optimizeDeps: {
     include: ['@aura/api-client', '@aura/shared-types', '@aura/platform'],
     exclude: ['three'],
+  },
+  build: {
+    commonjsOptions: {
+      include: [/node_modules/, /packages\/(?:platform|api-client|shared-types)\//],
+    },
   },
   server: {
     port: 5173,

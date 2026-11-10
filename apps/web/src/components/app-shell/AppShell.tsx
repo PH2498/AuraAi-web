@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useSession } from '../../app/session';
+import { connectionLabel } from '../../state/models';
 import { resolvedOs } from '../../state/settings';
 import { CoreProvider } from '../aura-core/CoreProvider';
 import { Icon, WordmarkGlyph } from '../icon';
@@ -34,6 +35,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     toggleDictation,
     pending,
     ollamaReady,
+    ollamaModels,
+    endpoints,
+    cloudProbes,
     levelRef,
     drawerOpen,
     setDrawerOpen,
@@ -47,7 +51,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const os = resolvedOs(settings);
   const [systemReduced, setSystemReduced] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   const reduced = settings.motion === 'reduce' || (settings.motion !== 'full' && systemReduced);
-  const connected = ollamaReady && settings.model === 'local';
+  const connection = connectionLabel(settings, ollamaReady, ollamaModels, endpoints, cloudProbes);
   const [indicator, setIndicator] = useState({ x: 0, width: 0, visible: page !== 'settings' });
   const sensingOn = dictating || sensing.mic || sensing.cam || sensing.screen;
   document.body.dataset.page = page;
@@ -281,9 +285,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               全部停止
             </button>
           </div>
-          <span className={`pill conn${connected ? ' ok' : ' warn'}`}>
+          <span className={`pill conn${connection.ok ? ' ok' : ' warn'}`}>
             <span className="dot" />
-            {connected ? '已连接' : '未配置'}
+            {connection.text}
           </span>
           <NavLink
             to="/settings"

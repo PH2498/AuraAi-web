@@ -7,9 +7,10 @@ import { Icon } from '../components/icon';
 import { analyzeFrame, captureFrame, fetchSpeech } from '../vision/api';
 import { playAnalyzeStart, startAnalyzeBed, stopAnalyzeBed } from '../vision/cues';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
+import { resolveVision } from '../state/models';
 
 export function VisionPage() {
-  const { streams, sensing, toggleSensor, setAura, settings, requireAccount, confirm, toast } = useSession();
+  const { streams, sensing, toggleSensor, setAura, settings, ollamaModels, endpoints, requireAccount, confirm, toast } = useSession();
   const core = useCore();
   const cloudAllowed = useRef(false);
   const speakGen = useRef(0);
@@ -116,7 +117,12 @@ export function VisionPage() {
     if (!video || busy) return;
     unlockSpeech();
     if (!(await requireAccount())) return;
-    const cloud = settings.visionModel !== 'local';
+    const target = resolveVision(settings, ollamaModels, endpoints);
+    if (!target.ok) {
+      setMessage(target.message);
+      return;
+    }
+    const cloud = target.cloud;
     if (cloud && settings.uploadAsk === 'never') {
       setMessage('云端上传已关闭。这一帧没有发出去。');
       return;
@@ -151,8 +157,7 @@ export function VisionPage() {
     setMessage('正在看这一帧。原图不会保存。');
     try {
       const frame = await captureFrame(video);
-      const provider = settings.visionModel === 'gpt' ? 'openai' : settings.visionModel === 'claude' ? 'anthropic' : 'ollama';
-      const next = await analyzeFrame(frame, provider);
+      const next = await analyzeFrame(frame, { provider: target.provider, providerId: target.providerId, model: target.model });
       setResult(next);
       const spoken = [next.summary, ...(next.details ?? [])].filter(Boolean).join('。');
       speak(spoken);

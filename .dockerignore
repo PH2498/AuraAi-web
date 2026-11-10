@@ -1,0 +1,10 @@
+node_modules
+**/dist
+.git
+.vite
+coverage
+.env
+.env.*
+!**/.env.example
+backups
+*.dump

@@ -10,6 +10,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { ConversationsModule } from './modules/conversations/conversations.module';
 import { HealthModule } from './modules/health/health.module';
 import { ProvidersModule } from './modules/providers/providers.module';
+import { FeedbackModule } from './modules/feedback/feedback.module';
 import { MemoryModule } from './modules/memory/memory.module';
 import { VisionModule } from './modules/vision/vision.module';
 import { VoiceModule } from './modules/voice/voice.module';
@@ -28,6 +29,7 @@ import { VoiceModule } from './modules/voice/voice.module';
             'req.headers["x-api-key"]',
             'req.body.password',
             'req.body.apiKey',
+            'req.body.message',
           ],
           remove: true,
         },
@@ -56,6 +58,7 @@ import { VoiceModule } from './modules/voice/voice.module';
     VisionModule,
     VoiceModule,
     MemoryModule,
+    FeedbackModule,
   ],
 })
 export class AppModule {}

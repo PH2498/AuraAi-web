@@ -11,11 +11,19 @@
 
 ## 当前阶段
 
+**Phase 8 已接上质量、部署和试用反馈。持续看画面还没有做。不要做 Electron。**
+
+- 页面渲染出错时停在「这一页没有打开」，可以刷新。对话、视觉、任务、记忆、设置按页面拆开加载
+- 设置「关于」可以提交试用反馈。`POST /api/v1/feedback` 只写入当前账号，审计里只记字数。每人每天最多 20 条
+- 生产启动会拒绝占位密钥、`*` 跨域和开发库口令。Swagger 只在非生产环境打开。会话 cookie 在生产环境带 Secure
+- `pnpm build` 会编出服务端和网页。`apps/server/Dockerfile`、`apps/web/Dockerfile` 与 `docker-compose.prod.yml` 用 Caddy 提供 HTTPS（本地是内部证书）
+- `pnpm db:backup` 导出自定义格式备份。`pnpm db:verify-backup` 导出后检查清单里有 `users` 和 `feedback`，然后删掉临时文件。恢复用 `scripts/db-restore.sh`，会覆盖目标库
+
 **Phase 7 已接上账号记忆和语音。持续看画面还没有做。不要做 Electron。**
 
 - 记忆在 `memories` 表，迁移 `apps/server/drizzle/0003_phase7.sql`。手动添加直接生效；对话或任务提议是待确认，`POST /api/v1/memories/:id/approve` 之后才生效
 - 对话的系统提示和 `list_memories` 只带已确认的记忆，待确认的不会进去。搜索是标题和内容的模糊匹配，没有向量
-- 首页点发光体用浏览器语音识别。转写出现后要点「用这句发送」才会发出。麦克风被拒绝时可以再允许、再点一次
+- 首页和对话页的语音识别直接写入输入框，用原来的发送按钮发出。聆听时发光体跟着麦克风音量起伏。麦克风被拒绝时可以再允许、再点一次
 - 回复、对话页和设置里的朗读走 `POST /api/v1/voice/speech`，由本机语音合成后在浏览器播放。音频不保存，也没有公开地址
 - `POST /api/v1/voice/transcriptions` 会检查录音格式。本机没有识别程序时返回 409，并请用户改用页面上的语音输入。录音不保存
 - 设置里的保留期限还不会自动删条目。清空未固定会删账号里的未固定记忆，不能撤销
@@ -139,7 +147,7 @@ corepack pnpm dev
 - 核心画质的「省电 / 高画质」会调用核心的画质切换。图形设备名称来自这台机器的 WebGL 渲染器
 - 任务详情标题带状态：待确认、进行中、已完成、失败。登录后可以在列表里创建真实任务，待确认的笔记步骤会显示允许或不允许
 
-Phase 2 验收已通过。Phase 3 的接口和集成测试已通过。Phase 4 已能通过本机 Ollama 流式对话。Phase 5 的任务状态机、白名单和确认流已接上。Phase 7 的记忆和语音已接上。不要做 Electron。不要开始 Phase 8。
+Phase 2 验收已通过。Phase 3 的接口和集成测试已通过。Phase 4 已能通过本机 Ollama 流式对话。Phase 5 的任务状态机、白名单和确认流已接上。Phase 7 的记忆和语音已接上。Phase 8 的构建、备份检查、错误页和试用反馈已接上。不要做 Electron。
 
 ## 不要动
 

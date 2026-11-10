@@ -7,13 +7,18 @@ import helmet from 'helmet';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 import { AppModule } from './app.module';
 import { loadEnvFile } from './config/env-file';
-import { parseEnv } from './config/env';
+import { parseEnv, productionConfigError } from './config/env';
 
 async function bootstrap(): Promise<void> {
   loadEnvFile();
   const parsed = parseEnv(process.env);
   if (!parsed.ok) {
     console.error(parsed.message);
+    process.exit(1);
+  }
+  const unsafe = productionConfigError(parsed.env);
+  if (unsafe) {
+    console.error(unsafe);
     process.exit(1);
   }
 

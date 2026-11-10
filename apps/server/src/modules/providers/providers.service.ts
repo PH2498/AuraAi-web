@@ -12,23 +12,23 @@ import { AuditService } from '../audit/audit.service';
 import { OllamaAdapter } from '../ai/ollama.adapter';
 import { OpenAiAdapter } from '../ai/openai.adapter';
 
-const PROVIDERS = ['ollama', 'openai', 'anthropic', 'gemini'] as const;
+const PROVIDERS = ['ollama', 'openai'] as const;
 
 const CreateSchema = z.object({
   provider: z.enum(PROVIDERS),
   displayName: z.string().trim().min(1).max(80),
-  apiKey: z.string().max(500).optional(),
+  apiKey: z.string().max(4000).optional(),
   baseUrl: z.union([z.string().trim().url().max(300), z.literal('')]).optional(),
-  defaultModel: z.string().trim().max(80).optional(),
+  defaultModel: z.string().trim().max(200).optional(),
   enabled: z.boolean().optional(),
 });
 
 const UpdateSchema = z
   .object({
     displayName: z.string().trim().min(1).max(80).optional(),
-    apiKey: z.string().max(500).nullable().optional(),
+    apiKey: z.string().max(4000).nullable().optional(),
     baseUrl: z.union([z.string().trim().url().max(300), z.literal('')]).nullable().optional(),
-    defaultModel: z.string().trim().max(80).nullable().optional(),
+    defaultModel: z.string().trim().max(200).nullable().optional(),
     enabled: z.boolean().optional(),
   })
   .refine(
@@ -62,6 +62,19 @@ export class ProvidersService {
   async create(userId: string, body: unknown) {
     const parsed = CreateSchema.safeParse(body);
     if (!parsed.success) fail(400, 'VALIDATION_ERROR', '请求无效', { fields: ['provider', 'displayName'] });
+    if (parsed.data.provider === 'openai') {
+      if (!parsed.data.baseUrl) fail(400, 'VALIDATION_ERROR', '云端接口需要填写地址。');
+      if (!parsed.data.defaultModel) fail(400, 'VALIDATION_ERROR', '云端接口需要填写模型名。');
+      if ((parsed.data.apiKey?.trim().length ?? 0) < 8) fail(400, 'VALIDATION_ERROR', '云端接口需要密钥。密钥只保存在服务器。');
+    }
+    if (parsed.data.provider === 'ollama') {
+      const [existing] = await this.database.db
+        .select({ id: providerConfigs.id })
+        .from(providerConfigs)
+        .where(and(eq(providerConfigs.userId, userId), eq(providerConfigs.provider, 'ollama')))
+        .limit(1);
+      if (existing) fail(409, 'CONFLICT', '本机 Ollama 已经配置过');
+    }
     const secret = parsed.data.apiKey?.trim() ?? '';
     let row: ProviderRow | undefined;
     try {
@@ -79,7 +92,7 @@ export class ProvidersService {
         })
         .returning();
     } catch (error) {
-      if (isUnique(error)) fail(409, 'CONFLICT', '这个提供方已经配置过');
+      if (isUnique(error)) fail(409, 'CONFLICT', '本机 Ollama 已经配置过');
       throw error;
     }
     if (!row) fail(500, 'INTERNAL_ERROR', '服务暂时不可用');
@@ -148,10 +161,10 @@ export class ProvidersService {
     const key = row.encryptedApiKey ? decryptSecret(row.encryptedApiKey, this.env.ENCRYPTION_KEY) : '';
     const health =
       row.provider === 'ollama'
-        ? await new OllamaAdapter(row.baseUrl || 'http://127.0.0.1:11434').healthCheck(row.defaultModel, signal)
+        ? await new OllamaAdapter(row.baseUrl || 'http://127.0.0.1:11434').healthCheck(null, signal)
         : row.provider === 'openai'
           ? await new OpenAiAdapter(row.baseUrl || 'https://api.openai.com/v1', key).healthCheck(row.defaultModel, signal)
-          : { ok: false, message: '这个提供方这一阶段还不能测试连接' };
+          : { ok: false, message: '这个接口还不能测试连接' };
     await this.audit.record({
       userId,
       action: 'provider.test',

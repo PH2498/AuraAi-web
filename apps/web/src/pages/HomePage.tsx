@@ -10,7 +10,8 @@ import { createMemory } from '../memory/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 import { CONVERSATIONS, SUGGESTIONS } from '../fixtures/content';
-import { MODELS, STATE_LABEL } from '../state/settings';
+import { connectionLabel, describeChoice, localChatReady, resolveChat, type CloudEndpoint } from '../state/models';
+import { STATE_LABEL, type WebSettings } from '../state/settings';
 
 type Stage = { id: string; label: string; status: 'pending' | 'active' | 'done' | 'fail' };
 
@@ -18,6 +19,14 @@ const THINKING: Stage[] = [
   { id: 'intent', label: '理解意图', status: 'pending' },
   { id: 'answer', label: '组织回答', status: 'pending' },
 ];
+
+function homeRunLine(settings: WebSettings, ollamaReady: boolean, names: string[], endpoints: CloudEndpoint[]) {
+  const choice = describeChoice(settings.chatModel, endpoints);
+  if (choice.where === '未选择') return '还没有选择模型。记忆记在账号里，待确认的不会进入对话。';
+  if (choice.icon === 'cloud') return `对话发给云端「${choice.where}」。记忆记在账号里，待确认的不会进入对话。`;
+  if (localChatReady(settings, ollamaReady, names)) return `对话发给本机的 ${choice.name}。记忆记在账号里，待确认的不会进入对话。`;
+  return '本机模型还没有连通。记忆记在账号里，待确认的不会进入对话。';
+}
 
 function greeting() {
   const hour = new Date().getHours();
@@ -29,7 +38,7 @@ function greeting() {
 }
 
 export function HomePage() {
-  const { aura, setAura, sensing, dictating, toggleDictation, settings, ollamaReady, ollamaModels, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
+  const { aura, setAura, sensing, dictating, toggleDictation, settings, ollamaReady, ollamaModels, endpoints, cloudProbes, noteCloudProbe, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
   const [draft, setDraft] = useState('');
   const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean; stages: Stage[] } | null>(null);
   const [focused, setFocused] = useState(false);
@@ -99,12 +108,13 @@ export function HomePage() {
         setDraft(ask);
         return;
       }
-      if (settings.model === 'claude') {
-        show('Claude 这一阶段还没有接入。当前可以对话的是本机 Ollama。');
+      const target = resolveChat(settings, ollamaModels, endpoints);
+      if (!target.ok) {
+        show(target.message);
         return;
       }
-      const cloud = settings.model === 'gpt';
-      const model = cloud ? 'gpt-4o' : (ollamaModels.find((name) => name.startsWith('qwen2.5')) ?? ollamaModels[0] ?? 'qwen2.5:7b');
+      const cloud = target.cloud;
+      const model = target.model;
       const controller = new AbortController();
       stopRef.current = controller;
       setBusy(true);
@@ -155,7 +165,7 @@ export function HomePage() {
         ]);
         core.setTicks(2, 1);
         await streamReply(
-          { message: ask, provider: cloud ? 'openai' : 'ollama', model },
+          { message: ask, provider: target.provider, providerId: target.providerId, model },
           {
             signal: controller.signal,
             onStart: () => beginReply(),
@@ -167,6 +177,7 @@ export function HomePage() {
             },
           },
         );
+        if (target.providerId) noteCloudProbe(target.providerId, 'ok');
         if (frame) window.cancelAnimationFrame(frame);
         if (!started) beginReply();
         setReading((current) => (current && current.ask === ask ? { ...current, answer, settled: true } : current));
@@ -198,6 +209,7 @@ export function HomePage() {
           setAura('idle');
           return;
         }
+        if (target.providerId) noteCloudProbe(target.providerId, 'fail');
         if (started) {
           setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || message, settled: true } : current));
           setAura('error');
@@ -299,12 +311,12 @@ export function HomePage() {
                       strokeWidth="1.6"
                     />
                   </svg>
-                  AURA · {MODELS[settings.model].name}
+                  AURA · {describeChoice(settings.chatModel, endpoints).name}
                 </div>
                 <details className="activity" open={!reading.settled}>
                   <summary>
                     <Icon name={reading.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
-                    <span className="sum">{reading.settled ? '本机模型回复' : '正在生成'}</span>
+                    <span className="sum">{reading.settled ? (describeChoice(settings.chatModel, endpoints).icon === 'cloud' ? '云端模型回复' : '本机模型回复') : '正在生成'}</span>
                     <Icon name="chevron-right" className="i i-14 chev" />
                   </summary>
                   <ol>
@@ -405,7 +417,7 @@ export function HomePage() {
           </div>
           <p className="hint warn">
             <Icon name="triangle-alert" className="i i-14" />
-            <span>{ollamaReady ? '对话发给本机 Ollama。记忆记在账号里，待确认的不会进入对话。' : 'Ollama 未连通。记忆记在账号里，待确认的不会进入对话。'}</span>
+            <span>{homeRunLine(settings, ollamaReady, ollamaModels, endpoints)}</span>
           </p>
         </div>
       </section>
@@ -434,9 +446,9 @@ export function HomePage() {
           <span>运行</span>
         </div>
         <span className="v">
-          {ollamaReady && settings.model === 'local' ? `${MODELS.local.name} · 已连接` : `${MODELS[settings.model].name} · 未配置`}
+          {describeChoice(settings.chatModel, endpoints).name} · {connectionLabel(settings, ollamaReady, ollamaModels, endpoints, cloudProbes).text}
         </span>
-        <span>{ollamaReady && settings.model === 'local' ? (ollamaModels[0] ?? 'qwen2.5:7b') : '尚未连通'}</span>
+        <span>{describeChoice(settings.chatModel, endpoints).where}</span>
       </aside>
 
       <aside className={`drawer${drawerOpen ? ' open' : ''}`} id="drawer" aria-label="会话">

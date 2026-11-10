@@ -29,6 +29,20 @@
       "when": 1762628400000,
       "tag": "0003_phase7",
       "breakpoints": false
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1762632000000,
+      "tag": "0004_phase8",
+      "breakpoints": false
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1762635600000,
+      "tag": "0005_models",
+      "breakpoints": false
     }
   ]
 }

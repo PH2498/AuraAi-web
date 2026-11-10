@@ -35,3 +35,14 @@ export function parseEnv(source: Record<string, string | undefined>): ParseResul
   const names = result.error.issues.map((issue) => issue.path.join('.') || '环境变量');
   return { ok: false, message: `配置无效，请检查: ${[...new Set(names)].join(', ')}` };
 }
+
+export function productionConfigError(env: AppEnv): string | null {
+  if (env.NODE_ENV !== 'production') return null;
+  const problems: string[] = [];
+  if (env.AUTH_SECRET === 'replace-me' || env.AUTH_SECRET.length < 24) problems.push('AUTH_SECRET');
+  if (env.ENCRYPTION_KEY.toLowerCase().includes('placeholder')) problems.push('ENCRYPTION_KEY');
+  if (env.CORS_ORIGINS.split(',').some((item) => item.trim() === '*')) problems.push('CORS_ORIGINS');
+  if (env.DATABASE_URL.includes('aura_dev')) problems.push('DATABASE_URL');
+  if (!problems.length) return null;
+  return `生产配置还不能上线，请更换: ${problems.join(', ')}`;
+}

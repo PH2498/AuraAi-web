@@ -1,9 +1,14 @@
 import type { VisionAnalyzeResult } from '@aura/shared-types';
 
-export async function analyzeFrame(image: Blob, provider: 'ollama' | 'openai' | 'anthropic'): Promise<VisionAnalyzeResult> {
+export async function analyzeFrame(
+  image: Blob,
+  target: { provider: 'ollama' | 'openai'; providerId?: string; model?: string },
+): Promise<VisionAnalyzeResult> {
   const body = new FormData();
   body.set('image', image, 'frame.jpg');
-  body.set('provider', provider);
+  body.set('provider', target.provider);
+  if (target.providerId) body.set('providerId', target.providerId);
+  if (target.model) body.set('model', target.model);
   const response = await fetch('/api/v1/vision/analyze', { method: 'POST', credentials: 'include', body });
   const payload = (await response.json().catch(() => null)) as (VisionAnalyzeResult & { message?: string }) | null;
   if (!response.ok) throw new Error(payload?.message || '这一帧没有分析完');

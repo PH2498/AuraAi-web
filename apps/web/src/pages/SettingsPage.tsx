@@ -3,8 +3,10 @@ import { NavLink, useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../app/session';
 import { useCoreSlot } from '../components/aura-core/CoreProvider';
 import { Icon, Wordmark } from '../components/icon';
-import { MODELS, type ModelId, type WebSettings } from '../state/settings';
-import { listProviders, saveOpenAiKey } from '../chat/api';
+import { type WebSettings } from '../state/settings';
+import { createCloudEndpoint, deleteProvider, testProvider, updateCloudEndpoint } from '../chat/api';
+import { cloudRef, connectionLabel, isVisionModelName, localRef, parseModelRef, describeChoice } from '../state/models';
+import { listFeedback, sendFeedback } from '../feedback/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 
@@ -33,6 +35,18 @@ const SHORTCUTS: [string, string[]][] = [
 
 type Section = (typeof SECTIONS)[number][0];
 
+type CloudDraft = { name: string; baseUrl: string; model: string; apiKey: string };
+
+const BLANK_CLOUD: CloudDraft = { name: '', baseUrl: '', model: '', apiKey: '' };
+
+function cloudReady(draft: CloudDraft, editing: boolean) {
+  const named = draft.name.trim().length > 0 && draft.model.trim().length > 0 && /^https?:\/\//.test(draft.baseUrl.trim());
+  const key = draft.apiKey.trim();
+  if (!named) return false;
+  if (!editing) return key.length >= 8;
+  return key.length === 0 || key.length >= 8;
+}
+
 function gpuName() {
   try {
     const gl = document.createElement('canvas').getContext('webgl');
@@ -51,6 +65,10 @@ export function SettingsPage() {
     updateSettings: onChange,
     ollamaReady,
     ollamaModels,
+    endpoints,
+    cloudProbes,
+    noteCloudProbe,
+    reloadEndpoints,
     probeOllama: onProbe,
     sensing,
     streams,
@@ -65,9 +83,9 @@ export function SettingsPage() {
     requireAccount,
   } = useSession();
   const navigate = useNavigate();
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [openaiHint, setOpenaiHint] = useState<string | null>(null);
-  const [openaiConfigured, setOpenaiConfigured] = useState(false);
+  const [cloudDraft, setCloudDraft] = useState(BLANK_CLOUD);
+  const [cloudEditor, setCloudEditor] = useState<null | 'add' | string>(null);
+  const [savingCloud, setSavingCloud] = useState(false);
   const { section = 'general' } = useParams();
   const current = (SECTIONS.some((item) => item[0] === section) ? section : 'general') as Section;
   const slot = useCoreSlot<HTMLButtonElement>(true);
@@ -84,6 +102,9 @@ export function SettingsPage() {
   const [preview, setPreview] = useState(false);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const [noHits, setNoHits] = useState(false);
+  const [note, setNote] = useState('');
+  const [notes, setNotes] = useState<{ id: string; message: string; createdAt: string }[]>([]);
+  const [sendingNote, setSendingNote] = useState(false);
   const micOwned = useRef(false);
   const camOwned = useRef(false);
   const searching = query.trim().length > 0;
@@ -91,17 +112,10 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!account) {
-      setOpenaiConfigured(false);
-      setOpenaiHint(null);
+      setNotes([]);
       return;
     }
-    void listProviders()
-      .then((rows) => {
-        const openai = rows.find((item) => item.provider === 'openai');
-        setOpenaiConfigured(Boolean(openai?.keyConfigured));
-        setOpenaiHint(openai?.keyHint ?? null);
-      })
-      .catch(() => undefined);
+    void listFeedback().then(setNotes).catch(() => setNotes([]));
   }, [account]);
 
   useEffect(() => {
@@ -160,6 +174,42 @@ export function SettingsPage() {
     });
     setNoHits(searching && rows.every((row) => row.classList.contains('is-out')));
   });
+
+  const saveCloud = (target: 'add' | string) => {
+    const draft = {
+      displayName: cloudDraft.name.trim(),
+      baseUrl: cloudDraft.baseUrl.trim(),
+      defaultModel: cloudDraft.model.trim(),
+      apiKey: cloudDraft.apiKey.trim(),
+    };
+    const editing = target !== 'add';
+    if (!cloudReady(cloudDraft, editing)) return;
+    setSavingCloud(true);
+    void (async () => {
+      try {
+        if (!(await requireAccount())) return;
+        if (editing) {
+          noteCloudProbe(target, null);
+          await updateCloudEndpoint(target, {
+            displayName: draft.displayName,
+            baseUrl: draft.baseUrl,
+            defaultModel: draft.defaultModel,
+            ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+          });
+        } else {
+          await createCloudEndpoint(draft);
+        }
+        await reloadEndpoints();
+        setCloudEditor(null);
+        setCloudDraft(BLANK_CLOUD);
+        toast(editing ? '已更新这个接口' : '云端接口已保存在服务器');
+      } catch (error) {
+        toast(error instanceof Error ? error.message : '接口没有保存', { icon: 'circle-alert' });
+      } finally {
+        setSavingCloud(false);
+      }
+    })();
+  };
 
   const openSection = (id: Section) => (searching ? true : current === id);
 
@@ -246,77 +296,158 @@ export function SettingsPage() {
           <section id="sec-models" hidden={!openSection('models')}>
             <header>
               <h2>模型</h2>
-              <p>没有探测成功之前，提供方都显示未配置。网页不保存密钥。</p>
+              <p>本地模型来自本机 Ollama 列出的名称。云端模型是你添加的兼容接口，密钥只保存在服务器。</p>
             </header>
-            <Row query={query} find="运行 本地 云端" title="运行方式" desc="仅本地时，云端模型不可选。">
+            <Row query={query} find="运行 本地 云端" title="运行方式" desc="仅本地时，云端接口不可选。对话实际使用你在下面选中的那一个。">
               <Select value={settings.runMode} label="运行方式" onChange={(value) => onChange({ runMode: value as WebSettings['runMode'] })}>
                 <option value="local-first">本地优先</option>
                 <option value="local-only">仅本地</option>
                 <option value="cloud">优先云端</option>
               </Select>
             </Row>
-            <Row query={query} find="默认 对话 模型" title="默认对话模型" desc="新对话使用这个模型。云端项未配置时不会发出请求。">
-              <ModelSelect value={settings.model} label="默认对话模型" localOnly={localOnly} onChange={(value) => onChange({ model: value })} />
-            </Row>
-            <Row query={query} find="默认 视觉 模型 画面" title="默认视觉模型" desc="只在视觉页点「分析这一帧」时使用。本机需要已安装的看图模型；没有的话会说明，不会拿文字模型假装看过。">
-              <ModelSelect value={settings.visionModel} label="默认视觉模型" localOnly={localOnly} onChange={(value) => onChange({ visionModel: value })} />
-            </Row>
-            <div className={`block${out(query, '提供方 ollama openai anthropic 密钥 key') ? ' is-out' : ''}`}>
-              <h3>提供方</h3>
-              <Provider find={query} name="Ollama" icon="hard-drive" desc="本机 · 不需要密钥" detail={settings.ollamaUrl} ok={ollamaReady} label={ollamaReady ? '已连接' : '未配置'} />
-              <Provider
-                find={query}
-                name="OpenAI"
-                icon="cloud"
-                desc={openaiConfigured ? `密钥保存在服务器 ····${openaiHint ?? ''}` : 'GPT-4o · 网页不保存密钥'}
-                blocked={localOnly}
-                label={localOnly ? '仅本地模式不可用' : openaiConfigured ? '已保存密钥' : '未配置 Key'}
+            <Row query={query} find="默认 对话 模型" title="默认对话模型" desc={ollamaModels.length ? `本机当前有 ${ollamaModels.length} 个模型。` : '本机还没有列出模型。到本地运行里测试 Ollama。'}>
+              <ModelPicker
+                value={settings.chatModel}
+                label="默认对话模型"
+                localOnly={localOnly}
+                localNames={ollamaModels}
+                endpoints={endpoints}
+                onChange={(value) => onChange({ chatModel: value })}
               />
-              {account && !localOnly ? (
-                <div className={`prow${out(query, 'openai 密钥 key') ? ' is-out' : ''}`}>
-                  <Icon name="lock" />
-                  <div className="prow-body">
-                    <div className="prow-head">
-                      <div>
-                        <b>保存 OpenAI 密钥</b>
-                        <span className="s">只发送一次到服务器，输入框随后清空。</span>
-                      </div>
-                    </div>
-                    <div className="prow-actions">
-                      <input
-                        className="input"
-                        type="password"
-                        autoComplete="off"
-                        aria-label="OpenAI 密钥"
-                        placeholder="sk-…"
-                        value={openaiKey}
-                        onChange={(event) => setOpenaiKey(event.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-secondary"
-                        disabled={openaiKey.trim().length < 8}
-                        onClick={() => {
-                          const key = openaiKey.trim();
-                          setOpenaiKey('');
-                          void saveOpenAiKey(key)
-                            .then(() => listProviders())
-                            .then((rows) => {
-                              const openai = rows.find((item) => item.provider === 'openai');
-                              setOpenaiConfigured(Boolean(openai?.keyConfigured));
-                              setOpenaiHint(openai?.keyHint ?? null);
-                              toast('密钥已保存在服务器');
-                            })
-                            .catch((error: unknown) => toast(error instanceof Error ? error.message : '密钥没有保存', { icon: 'circle-alert' }));
-                        }}
-                      >
-                        保存
-                      </button>
-                    </div>
-                  </div>
+            </Row>
+            <Row query={query} find="默认 视觉 模型 画面" title="默认视觉模型" desc="本机只列出能看图的模型。文字模型不会出现在这里，也不会拿去看画面。">
+              <ModelPicker
+                value={settings.visionModel}
+                label="默认视觉模型"
+                localOnly={localOnly}
+                localNames={ollamaModels.filter(isVisionModelName)}
+                endpoints={endpoints}
+                onChange={(value) => onChange({ visionModel: value })}
+              />
+            </Row>
+            <div className={`block${out(query, '云端 第三方 接口 密钥 模型名 openai') ? ' is-out' : ''}`}>
+              <div className="block-head">
+                <div>
+                  <h3>云端接口</h3>
+                  <p className="s">每个接口使用 OpenAI 兼容的对话地址。添加后可以再改名称、地址、模型名和密钥。</p>
                 </div>
+                {cloudEditor === 'add' ? null : (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={savingCloud}
+                    onClick={() => {
+                      setCloudEditor('add');
+                      setCloudDraft(BLANK_CLOUD);
+                    }}
+                  >
+                    添加接口
+                  </button>
+                )}
+              </div>
+              {cloudEditor === 'add' ? (
+                <CloudFields
+                  title="添加接口"
+                  draft={cloudDraft}
+                  editing={false}
+                  saving={savingCloud}
+                  onChange={setCloudDraft}
+                  onCancel={() => {
+                    setCloudEditor(null);
+                    setCloudDraft(BLANK_CLOUD);
+                  }}
+                  onSave={() => saveCloud('add')}
+                />
               ) : null}
-              <Provider find={query} name="Anthropic" icon="cloud" desc="Claude Sonnet 4 · 网页不保存密钥" blocked={localOnly} label={localOnly ? '仅本地模式不可用' : '未配置 Key'} />
+              {endpoints.length === 0 && cloudEditor !== 'add' ? <p className="s endpoint-empty">还没有云端接口。</p> : null}
+              <ul className="endpoint-list">
+                {endpoints.map((item) =>
+                  cloudEditor === item.id ? (
+                    <li key={item.id}>
+                      <CloudFields
+                        title={`编辑「${item.displayName}」`}
+                        draft={cloudDraft}
+                        editing
+                        keyHint={item.keyConfigured ? item.keyHint : null}
+                        saving={savingCloud}
+                        onChange={setCloudDraft}
+                        onCancel={() => {
+                          setCloudEditor(null);
+                          setCloudDraft(BLANK_CLOUD);
+                        }}
+                        onSave={() => saveCloud(item.id)}
+                      />
+                    </li>
+                  ) : (
+                    <li key={item.id} className="endpoint-card">
+                      <div className="endpoint-copy">
+                        <b>{item.displayName}</b>
+                        <span className="s">{item.defaultModel || '未填模型'}</span>
+                        <span className="s">{item.baseUrl || '未填地址'} · {item.keyConfigured ? `密钥 ····${item.keyHint ?? ''}` : '没有密钥'}</span>
+                      </div>
+                      <span className="endpoint-actions">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setCloudEditor(item.id);
+                            setCloudDraft({ name: item.displayName, baseUrl: item.baseUrl ?? '', model: item.defaultModel ?? '', apiKey: '' });
+                          }}
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            void testProvider(item.id)
+                              .then((result) => {
+                                noteCloudProbe(item.id, result.ok ? 'ok' : 'fail');
+                                toast(result.message, { icon: result.ok ? 'circle-check' : 'circle-alert' });
+                              })
+                              .catch((error: unknown) => {
+                                noteCloudProbe(item.id, 'fail');
+                                toast(error instanceof Error ? error.message : '连接测试没有完成', { icon: 'circle-alert' });
+                              });
+                          }}
+                        >
+                          测试
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm btn-warn"
+                          onClick={() => {
+                            void confirm({
+                              title: `移除「${item.displayName}」？`,
+                              desc: '密钥会从服务器删掉。已经选中它的对话需要重新选模型。',
+                              deny: '取消',
+                              allow: '移除',
+                              danger: true,
+                            }).then(async (ok) => {
+                              if (!ok) return;
+                              try {
+                                await deleteProvider(item.id);
+                                if (cloudEditor === item.id) {
+                                  setCloudEditor(null);
+                                  setCloudDraft(BLANK_CLOUD);
+                                }
+                                if (settings.chatModel === cloudRef(item.id)) onChange({ chatModel: '' });
+                                if (settings.visionModel === cloudRef(item.id)) onChange({ visionModel: '' });
+                                await reloadEndpoints();
+                                toast('已移除这个接口');
+                              } catch (error) {
+                                toast(error instanceof Error ? error.message : '这次没有移除', { icon: 'circle-alert' });
+                              }
+                            });
+                          }}
+                        >
+                          移除
+                        </button>
+                      </span>
+                    </li>
+                  ),
+                )}
+              </ul>
             </div>
           </section>
 
@@ -684,7 +815,7 @@ export function SettingsPage() {
             </Row>
             <Row query={query} find="当前 对话 模型" title="当前对话模型" desc="和命令栏里的选择是同一个。">
               <span className="pill">
-                {MODELS[settings.model].name} · {MODELS[settings.model].where} · {settings.model === 'local' && ollamaReady ? '已连接' : '未就绪'}
+                {describeChoice(settings.chatModel, endpoints).name} · {describeChoice(settings.chatModel, endpoints).where} · {connectionLabel(settings, ollamaReady, ollamaModels, endpoints, cloudProbes).text}
               </span>
             </Row>
             <div className={`block${out(query, '本机 模型 列表') ? ' is-out' : ''}`}>
@@ -739,6 +870,43 @@ export function SettingsPage() {
             <Row query={query} find="依赖 three motion lucide" title="开源依赖" desc="Three.js、Lucide。图标与三维核心都在项目本地。">
               <span className="status-line">本地资源</span>
             </Row>
+            <div className={`block${out(query, '试用 反馈 问题') ? ' is-out' : ''}`}>
+              <h3>试用反馈</h3>
+              <p className="s">写给这一版的问题或想法。只存在你的账号里，不会进入对话。</p>
+              <textarea
+                className="input"
+                maxLength={1000}
+                value={note}
+                placeholder="例如：语音停下后，球体收回得还是慢了一点"
+                onChange={(event) => setNote(event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={sendingNote || !note.trim()}
+                onClick={() => {
+                  const message = note.trim();
+                  if (!message) return;
+                  setSendingNote(true);
+                  void (async () => {
+                    try {
+                      if (!(await requireAccount())) return;
+                      const saved = await sendFeedback(message);
+                      setNotes((items) => [saved, ...items].slice(0, 20));
+                      setNote('');
+                      toast('已记下。谢谢。');
+                    } catch (error) {
+                      toast(error instanceof Error ? error.message : '这次没有送出。');
+                    } finally {
+                      setSendingNote(false);
+                    }
+                  })();
+                }}
+              >
+                发送反馈
+              </button>
+              {notes[0] ? <p className="s">最近一条：{notes[0].message}</p> : null}
+            </div>
             <Row query={query} find="恢复 默认 重置" title="恢复默认设置" desc="清除这台浏览器上的 AURA 设置。记忆和会话索引不会动。">
               <button
                 type="button"
@@ -747,7 +915,7 @@ export function SettingsPage() {
                   void confirm({
                     risk: '会恢复这台浏览器上的 AURA 设置',
                     title: '恢复默认设置？',
-                    desc: '记忆和会话索引会留下。模型选择会回到本地 Qwen2.5 7B。',
+                    desc: '记忆和会话索引会留下。模型选择会清空，本机重新列出后再选。',
                     rows: [
                       ['sliders-horizontal', '会清除', '窗口、模型、语音、隐私等偏好'],
                       ['brain', '会留下', '记忆条目'],
@@ -839,65 +1007,111 @@ function Select({
   );
 }
 
-function ModelSelect({
+function ModelPicker({
   value,
   label,
   localOnly,
+  localNames,
+  endpoints,
   onChange,
 }: {
-  value: ModelId;
+  value: string;
   label: string;
   localOnly: boolean;
-  onChange: (value: ModelId) => void;
+  localNames: string[];
+  endpoints: { id: string; displayName: string; defaultModel: string | null; keyConfigured: boolean }[];
+  onChange: (value: string) => void;
 }) {
+  const parsed = parseModelRef(value);
+  const missingLocal = parsed?.kind === 'local' && !localNames.includes(parsed.name);
+  const missingCloud = parsed?.kind === 'cloud' && !endpoints.some((item) => item.id === parsed.id);
   return (
-    <Select value={value} label={label} onChange={(next) => onChange(next as ModelId)}>
-      {(Object.keys(MODELS) as ModelId[]).map((id) => (
-        <option key={id} value={id} disabled={localOnly && MODELS[id].cloud}>
-          {MODELS[id].name} · {MODELS[id].where}
-          {localOnly && MODELS[id].cloud ? '（仅本地不可用）' : MODELS[id].cloud ? '（未配置）' : ''}
-        </option>
-      ))}
+    <Select value={value} label={label} onChange={onChange}>
+      <option value="">未选择</option>
+      {missingLocal ? <option value={value}>{parsed.name}（当前列表里没有）</option> : null}
+      {missingCloud ? <option value={value}>这个接口已删除</option> : null}
+      <optgroup label="本地">
+        {localNames.map((name) => (
+          <option key={name} value={localRef(name)}>
+            {name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="云端">
+        {endpoints.map((item) => (
+          <option key={item.id} value={cloudRef(item.id)} disabled={localOnly || !item.keyConfigured || !item.defaultModel}>
+            {item.displayName} · {item.defaultModel || '未填模型'}
+            {localOnly ? '（仅本地不可用）' : !item.keyConfigured ? '（没有密钥）' : ''}
+          </option>
+        ))}
+      </optgroup>
     </Select>
   );
 }
 
-function Provider({
-  find,
-  name,
-  icon,
-  desc,
-  detail,
-  ok,
-  blocked,
-  label,
+function CloudFields({
+  title,
+  draft,
+  editing,
+  keyHint,
+  saving,
+  onChange,
+  onCancel,
+  onSave,
 }: {
-  find: string;
-  name: string;
-  icon: string;
-  desc: string;
-  detail?: string;
-  ok?: boolean;
-  blocked?: boolean;
-  label: string;
+  title: string;
+  draft: CloudDraft;
+  editing: boolean;
+  keyHint?: string | null;
+  saving: boolean;
+  onChange: (next: CloudDraft) => void;
+  onCancel: () => void;
+  onSave: () => void;
 }) {
+  const key = draft.apiKey.trim();
   return (
-    <div className={`prow${out(find, `${name} ${desc} key provider api`) ? ' is-out' : ''}`}>
-      <Icon name={icon} />
-      <div className="prow-body">
-        <div className="prow-head">
-          <div>
-            <b>{name}</b>
-            <span className="s">{desc}</span>
-            {detail ? <span className="s">{detail}</span> : null}
-          </div>
-          <span className={`pill ${ok ? 'ok' : 'warn'}`}>
-            <span className="dot" />
-            {blocked ? '仅本地模式不可用' : label}
-          </span>
-        </div>
+    <form
+      className="endpoint-card endpoint-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!saving && cloudReady(draft, editing)) onSave();
+      }}
+    >
+      <b>{title}</b>
+      <label>
+        名称
+        <input className="input" aria-label="接口名称" placeholder="例如 DeepSeek" value={draft.name} onChange={(event) => onChange({ ...draft, name: event.target.value })} />
+      </label>
+      <label>
+        地址
+        <input className="input" aria-label="接口地址" placeholder="https://api.example.com/v1" value={draft.baseUrl} onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })} />
+      </label>
+      <label>
+        模型名
+        <input className="input" aria-label="模型名" placeholder="按该接口要求填写" value={draft.model} onChange={(event) => onChange({ ...draft, model: event.target.value })} />
+      </label>
+      <label>
+        密钥
+        <input
+          className="input"
+          type="password"
+          autoComplete="off"
+          aria-label="接口密钥"
+          placeholder={editing ? '留空则保持原密钥' : '只发送一次到服务器'}
+          value={draft.apiKey}
+          onChange={(event) => onChange({ ...draft, apiKey: event.target.value })}
+        />
+      </label>
+        <p className="s">{editing ? (key ? (key.length < 8 ? '新密钥至少 8 位。' : '保存后会换上这条新密钥。') : keyHint ? `当前密钥 ····${keyHint}，留空不会改动。` : '还没有密钥。留空则继续不保存密钥。') : '密钥只保存在服务器，输入框随后清空。'}</p>
+      <div className="endpoint-actions">
+        <button type="button" className="btn btn-secondary btn-sm" disabled={saving} onClick={onCancel}>
+          取消
+        </button>
+        <button type="submit" className="btn btn-secondary btn-sm" disabled={saving || !cloudReady(draft, editing)}>
+          {editing ? '保存修改' : '保存'}
+        </button>
       </div>
-    </div>
+    </form>
   );
 }
 

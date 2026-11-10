@@ -55,30 +55,61 @@ export async function deleteConversation(id: string): Promise<void> {
   if (!response.ok) throw new Error(await readError(response));
 }
 
-export async function listProviders(): Promise<{ id: string; provider: string; keyConfigured: boolean; keyHint: string | null }[]> {
+export type ProviderConfig = {
+  id: string;
+  provider: string;
+  displayName: string;
+  baseUrl: string | null;
+  defaultModel: string | null;
+  enabled: boolean;
+  keyConfigured: boolean;
+  keyHint: string | null;
+};
+
+export async function listProviders(): Promise<ProviderConfig[]> {
   const response = await fetch('/api/v1/providers', { credentials: 'include' });
   if (response.status === 401) return [];
   if (!response.ok) throw new Error(await readError(response));
-  return response.json() as Promise<{ id: string; provider: string; keyConfigured: boolean; keyHint: string | null }[]>;
+  return response.json() as Promise<ProviderConfig[]>;
 }
 
-export async function saveOpenAiKey(apiKey: string): Promise<void> {
-  const rows = await listProviders();
-  const current = rows.find((item) => item.provider === 'openai');
-  const payload = current
-    ? { apiKey, defaultModel: 'gpt-4o' }
-    : { provider: 'openai', displayName: 'OpenAI', apiKey, defaultModel: 'gpt-4o', baseUrl: 'https://api.openai.com/v1' };
-  const response = await fetch(current ? `/api/v1/providers/${current.id}` : '/api/v1/providers', {
-    method: current ? 'PATCH' : 'POST',
+export async function updateCloudEndpoint(
+  id: string,
+  input: { displayName: string; baseUrl: string; defaultModel: string; apiKey?: string },
+): Promise<void> {
+  const response = await fetch(`/api/v1/providers/${id}`, {
+    method: 'PATCH',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await readError(response));
 }
 
-export async function refreshOllama(baseUrl: string, model: string): Promise<{ ok: boolean; message: string; models: string[] }> {
-  await ensureOllama(baseUrl, model);
+export async function createCloudEndpoint(input: { displayName: string; baseUrl: string; defaultModel: string; apiKey: string }): Promise<void> {
+  const response = await fetch('/api/v1/providers', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'openai', enabled: true, ...input }),
+  });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function deleteProvider(id: string): Promise<void> {
+  const response = await fetch(`/api/v1/providers/${id}`, { method: 'DELETE', credentials: 'include' });
+  if (!response.ok) throw new Error(await readError(response));
+}
+
+export async function testProvider(id: string): Promise<{ ok: boolean; message: string }> {
+  const response = await fetch(`/api/v1/providers/${id}/test`, { method: 'POST', credentials: 'include' });
+  const body = (await response.json().catch(() => null)) as { ok?: boolean; message?: string } | null;
+  if (!response.ok) throw new Error(body?.message || '连接测试没有完成');
+  return { ok: Boolean(body?.ok), message: body?.message || '连接测试没有完成' };
+}
+
+export async function refreshOllama(baseUrl: string): Promise<{ ok: boolean; message: string; models: string[] }> {
+  await ensureOllama(baseUrl);
   const listed = await fetch('/api/v1/providers', { credentials: 'include' });
   if (!listed.ok) throw new Error(await readError(listed));
   const rows = (await listed.json()) as { id: string; provider: string }[];
@@ -102,7 +133,7 @@ export async function loginAccount(email: string, password: string): Promise<Acc
   return body.user;
 }
 
-export async function ensureOllama(baseUrl: string, model: string): Promise<void> {
+export async function ensureOllama(baseUrl: string, model?: string): Promise<void> {
   const response = await fetch('/api/v1/providers', { credentials: 'include' });
   if (!response.ok) throw new Error(await readError(response));
   const rows = (await response.json()) as { id: string; provider: string; baseUrl: string | null; defaultModel: string | null }[];
@@ -112,17 +143,20 @@ export async function ensureOllama(baseUrl: string, model: string): Promise<void
       method: 'POST',
       credentials: 'include',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: 'ollama', displayName: 'Ollama', baseUrl, defaultModel: model, enabled: true }),
+      body: JSON.stringify({ provider: 'ollama', displayName: 'Ollama', baseUrl, ...(model ? { defaultModel: model } : {}), enabled: true }),
     });
     if (!created.ok) throw new Error(await readError(created));
     return;
   }
-  if (current.baseUrl === baseUrl && current.defaultModel === model) return;
+  const patch: { baseUrl?: string; defaultModel?: string } = {};
+  if (current.baseUrl !== baseUrl) patch.baseUrl = baseUrl;
+  if (model && current.defaultModel !== model) patch.defaultModel = model;
+  if (!patch.baseUrl && !patch.defaultModel) return;
   const updated = await fetch(`/api/v1/providers/${current.id}`, {
     method: 'PATCH',
     credentials: 'include',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ baseUrl, defaultModel: model }),
+    body: JSON.stringify(patch),
   });
   if (!updated.ok) throw new Error(await readError(updated));
 }
@@ -140,7 +174,7 @@ export async function listMessages(conversationId: string): Promise<ServerMessag
 }
 
 export async function streamReply(
-  input: { message: string; conversationId?: string; provider: 'ollama' | 'openai'; model: string },
+  input: { message: string; conversationId?: string; provider: 'ollama' | 'openai'; providerId?: string; model: string },
   handlers: {
     signal: AbortSignal;
     onStart: (event: Extract<ChatStream, { type: 'message_start' }>) => void;

@@ -15,7 +15,10 @@
     "test": "corepack pnpm build:libs && vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:migrate": "corepack pnpm --filter @aura/server db:migrate"
+    "build": "corepack pnpm build:libs && corepack pnpm --filter @aura/server build && corepack pnpm --filter @aura/web build",
+    "db:migrate": "corepack pnpm --filter @aura/server db:migrate",
+    "db:backup": "sh scripts/db-backup.sh",
+    "db:verify-backup": "node scripts/verify-backup.mjs"
   },
   "devDependencies": {
     "@aura/config": "workspace:*",

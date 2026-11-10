@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export const users = pgTable('users', {
@@ -75,7 +76,7 @@ export const providerConfigs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('provider_configs_user_provider_idx').on(table.userId, table.provider)],
+  (table) => [uniqueIndex('provider_configs_user_ollama_idx').on(table.userId).where(sql`${table.provider} = 'ollama'`)],
 );
 
 export const notes = pgTable(
@@ -151,6 +152,19 @@ export const memories = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('memories_user_id_idx').on(table.userId)],
+);
+
+export const feedback = pgTable(
+  'feedback',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    message: text('message').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('feedback_user_id_idx').on(table.userId)],
 );
 
 export const auditLogs = pgTable(

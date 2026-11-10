@@ -15,7 +15,7 @@ export class OpenAiAdapter implements ModelProvider {
 
   async *stream(request: ChatRequest, signal: AbortSignal): AsyncIterable<ProviderEvent> {
     if (!this.apiKey) {
-      yield { type: 'error', code: 'PROVIDER_NOT_CONFIGURED', message: 'OpenAI 密钥未配置' };
+      yield { type: 'error', code: 'PROVIDER_NOT_CONFIGURED', message: '这个云端接口还没有密钥' };
       return;
     }
     let response: Response;
@@ -35,7 +35,7 @@ export class OpenAiAdapter implements ModelProvider {
         yield { type: 'error', code: 'CANCELLED', message: '已停止生成' };
         return;
       }
-      yield { type: 'error', code: 'PROVIDER_UNAVAILABLE', message: '没有连上 OpenAI' };
+      yield { type: 'error', code: 'PROVIDER_UNAVAILABLE', message: '没有连上这个接口' };
       return;
     }
     if (!response.ok || !response.body) {
@@ -73,16 +73,48 @@ export class OpenAiAdapter implements ModelProvider {
   }
 
   async healthCheck(model: string | null, signal: AbortSignal): Promise<ProviderHealth> {
-    if (!this.apiKey) return { ok: false, message: 'OpenAI 密钥未配置' };
+    if (!this.apiKey) return { ok: false, message: '这个云端接口还没有密钥' };
     try {
-      const response = await this.fetchImpl(`${this.baseUrl}/models${model ? `/${encodeURIComponent(model)}` : ''}`, {
+      const listed = await this.fetchImpl(`${this.baseUrl}/models`, {
         signal,
         headers: { accept: 'application/json', authorization: `Bearer ${this.apiKey}` },
       });
-      if (!response.ok) return { ok: false, message: providerMessage(response.status, await response.text()) };
-      return { ok: true, message: 'OpenAI 已连通' };
+      const text = await listed.text();
+      if (listed.ok) {
+        const names = modelNames(text);
+        if (model && names.length > 0 && !names.includes(model)) {
+          return { ok: false, message: `接口已连通，但没有列出模型 ${model}` };
+        }
+        return { ok: true, message: names.length ? `接口已连通，列出 ${names.length} 个模型` : '接口已连通' };
+      }
+      if ((listed.status === 404 || listed.status === 405) && model) return this.probeChat(model, signal);
+      return { ok: false, message: providerMessage(listed.status, text) };
     } catch {
-      return { ok: false, message: '没有连上 OpenAI' };
+      return { ok: false, message: '没有连上这个接口' };
     }
+  }
+
+  private async probeChat(model: string, signal: AbortSignal): Promise<ProviderHealth> {
+    const response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+        authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false }),
+    });
+    if (!response.ok) return { ok: false, message: providerMessage(response.status, await response.text()) };
+    return { ok: true, message: '接口已连通' };
+  }
+}
+
+function modelNames(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text) as { data?: { id?: string }[]; models?: { id?: string }[] };
+    return (parsed.data ?? parsed.models ?? []).map((item) => item.id).filter((id): id is string => Boolean(id));
+  } catch {
+    return [];
   }
 }

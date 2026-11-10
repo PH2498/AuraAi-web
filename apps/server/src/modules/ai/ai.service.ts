@@ -16,8 +16,9 @@ import type { ChatMessage, ModelProvider } from './provider';
 
 const ChatSchema = z.object({
   conversationId: z.string().uuid().optional(),
+  providerId: z.string().uuid().optional(),
   provider: z.enum(['ollama', 'openai']).optional(),
-  model: z.string().trim().min(1).max(80).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
   message: z.string().trim().min(1).max(20_000),
 });
 
@@ -47,12 +48,12 @@ export class AiService {
   async prepare(userId: string, body: unknown): Promise<Prepared> {
     const parsed = ChatSchema.safeParse(body);
     if (!parsed.success) fail(400, 'VALIDATION_ERROR', '请求无效', { fields: ['message'] });
-    const config = await this.resolveConfig(userId, parsed.data.provider);
+    const config = await this.resolveConfig(userId, parsed.data.provider, parsed.data.providerId);
     if (!config) {
-      fail(409, 'PROVIDER_NOT_CONFIGURED', '提供方还没有配置。请先保存 Ollama 地址，或在服务器保存 OpenAI 密钥。');
+      fail(409, 'PROVIDER_NOT_CONFIGURED', '还没有可用的模型。请接上本机 Ollama，或添加一个云端接口。');
     }
     if (config.provider === 'openai' && !config.apiKey) {
-      fail(409, 'PROVIDER_NOT_CONFIGURED', 'OpenAI 密钥未配置。密钥只保存在服务器。');
+      fail(409, 'PROVIDER_NOT_CONFIGURED', '这个云端接口还没有密钥。密钥只保存在服务器。');
     }
     const model = parsed.data.model || config.model;
     if (!model) fail(409, 'PROVIDER_NOT_CONFIGURED', '还没有选择模型。');
@@ -228,12 +229,15 @@ export class AiService {
   private async resolveConfig(
     userId: string,
     requested?: 'ollama' | 'openai',
+    providerId?: string,
   ): Promise<{ provider: 'ollama' | 'openai'; model: string | null; baseUrl: string | null; apiKey: string } | null> {
     const rows = await this.database.db
       .select()
       .from(providerConfigs)
       .where(and(eq(providerConfigs.userId, userId), eq(providerConfigs.enabled, true)));
-    const row = rows.find((item) => item.provider === requested) ?? (requested ? undefined : rows.find((item) => item.provider === 'ollama' || item.provider === 'openai'));
+    const row = providerId
+      ? rows.find((item) => item.id === providerId)
+      : rows.find((item) => item.provider === requested) ?? (requested ? undefined : rows.find((item) => item.provider === 'ollama' || item.provider === 'openai'));
     if (!row || (row.provider !== 'ollama' && row.provider !== 'openai')) return null;
     const provider = row.provider === 'openai' ? 'openai' : 'ollama';
     return {

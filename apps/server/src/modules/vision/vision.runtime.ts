@@ -23,36 +23,55 @@ export class VisionRuntime {
     @Inject(ENV) private readonly env: AppEnv,
   ) {}
 
-  async look(userId: string, provider: 'ollama' | 'openai', bytes: Buffer, prompt: string, signal: AbortSignal): Promise<VisionCall> {
-    const config = await this.config(userId, provider);
+  async look(
+    userId: string,
+    request: { providerId?: string; provider?: string; model?: string },
+    bytes: Buffer,
+    prompt: string,
+    signal: AbortSignal,
+  ): Promise<VisionCall> {
+    const config = await this.config(userId, request);
     if (!config) {
-      const message = provider === 'openai' ? 'OpenAI 还没有配置密钥。这一帧没有发出去。' : '本机 Ollama 还没有配置。这一帧没有发出去。';
+      const message = request.provider === 'openai' || request.providerId
+        ? '这个云端接口还没有配置。这一帧没有发出去。'
+        : '本机 Ollama 还没有配置。这一帧没有发出去。';
       throw new VisionUnavailable(message);
     }
-    if (provider === 'openai') {
-      if (!config.apiKey) throw new VisionUnavailable('OpenAI 密钥还没有保存。这一帧没有发出去。');
-      const summary = await this.openAi(config, bytes, prompt, signal);
-      return { provider, model: config.model || 'gpt-4o', summary };
+    if (config.provider === 'openai') {
+      if (!config.apiKey) throw new VisionUnavailable('这个云端接口还没有密钥。这一帧没有发出去。');
+      const model = request.model || config.model;
+      if (!model) throw new VisionUnavailable('这个云端接口还没有填写模型名。这一帧没有发出去。');
+      const summary = await this.openAi({ ...config, model }, bytes, prompt, signal);
+      return { provider: 'openai', model, summary };
     }
     const names = await this.tags(config.baseUrl, signal);
-    const model = pickVisionModel(names);
+    const requested = request.model?.trim();
+    const model = requested ? this.installedVision(names, requested) : pickVisionModel(names);
     if (!model) {
       throw new VisionUnavailable('本机还没有可以看图的模型。当前文字模型不会假装看过这一帧，画面也没有发给它。');
     }
     const summary = await this.ollama(config.baseUrl, model, bytes, prompt, signal);
-    return { provider, model, summary };
+    return { provider: 'ollama', model, summary };
   }
 
-  private async config(userId: string, provider: 'ollama' | 'openai') {
+  private installedVision(names: string[], requested: string): string | null {
+    if (!pickVisionModel([requested])) return null;
+    return names.find((name) => name === requested || name.startsWith(`${requested}:`)) ?? null;
+  }
+
+  private async config(userId: string, request: { providerId?: string; provider?: string }) {
+    const provider = request.provider === 'openai' ? 'openai' : 'ollama';
     const rows = await this.database.db
       .select()
       .from(providerConfigs)
-      .where(and(eq(providerConfigs.userId, userId), eq(providerConfigs.enabled, true), eq(providerConfigs.provider, provider)));
-    const row = rows[0];
-    if (!row) return null;
+      .where(and(eq(providerConfigs.userId, userId), eq(providerConfigs.enabled, true)));
+    const row = request.providerId ? rows.find((item) => item.id === request.providerId) : rows.find((item) => item.provider === provider);
+    if (!row || (row.provider !== 'ollama' && row.provider !== 'openai')) return null;
+    const kind = row.provider === 'openai' ? 'openai' : 'ollama';
     return {
+      provider: kind as 'ollama' | 'openai',
       model: row.defaultModel,
-      baseUrl: originOf(row.baseUrl || (provider === 'openai' ? 'https://api.openai.com/v1' : 'http://127.0.0.1:11434')),
+      baseUrl: originOf(row.baseUrl || (kind === 'openai' ? 'https://api.openai.com/v1' : 'http://127.0.0.1:11434')),
       apiKey: row.encryptedApiKey ? decryptSecret(row.encryptedApiKey, this.env.ENCRYPTION_KEY) : '',
     };
   }
@@ -89,22 +108,27 @@ export class VisionRuntime {
     return response;
   }
 
-  private async openAi(config: { baseUrl: string; apiKey: string; model: string | null }, bytes: Buffer, prompt: string, signal: AbortSignal): Promise<string> {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
-      body: JSON.stringify({
-        model: config.model || 'gpt-4o',
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt || PROMPT },
-            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${bytes.toString('base64')}` } },
-          ],
-        }],
-      }),
-      signal,
-    });
+  private async openAi(config: { baseUrl: string; apiKey: string; model: string }, bytes: Buffer, prompt: string, signal: AbortSignal): Promise<string> {
+    let response: Response;
+    try {
+      response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt || PROMPT },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${bytes.toString('base64')}` } },
+            ],
+          }],
+        }),
+        signal,
+      });
+    } catch {
+      throw new VisionUnavailable('没有连上这个接口。这一帧没有发出去。');
+    }
     if (!response.ok) throw new VisionUnavailable(providerMessage(response.status, await response.text()));
     const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
     return body.choices?.[0]?.message?.content?.trim() || '模型没有返回看得见的内容。';

@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: aura
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在环境里设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: aura
+    volumes:
+      - aura-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U aura -d aura']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    environment:
+      NODE_ENV: production
+      API_PORT: 3000
+      DATABASE_URL: postgresql://aura:${POSTGRES_PASSWORD}@postgres:5432/aura
+      AUTH_SECRET: ${AUTH_SECRET:?请在环境里设置 AUTH_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?请在环境里设置 ENCRYPTION_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost}
+      LOG_LEVEL: info
+      AURA_BOOTSTRAP_EMAIL: ${AURA_BOOTSTRAP_EMAIL:-}
+      AURA_BOOTSTRAP_PASSWORD: ${AURA_BOOTSTRAP_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - server
+
+  caddy:
+    image: caddy:2
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      AURA_HOST: ${AURA_HOST:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+
+volumes:
+  aura-pg:
+  caddy-data:
+  caddy-config:

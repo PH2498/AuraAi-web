@@ -26,11 +26,11 @@ export function providerMessage(status: number, body: string): string {
   try {
     const parsed = JSON.parse(body) as { error?: { message?: string } | string };
     const message = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message;
-    if (message && message.length <= 180 && !/sk-|api[_-]?key|bearer /i.test(message)) return message;
+    if (message && message.length <= 180 && !/sk-|api[\s_-]*key|bearer |request[_ ]?id/i.test(message)) return message;
   } catch {
     // 响应不是 JSON 时使用下面的通用说明。
   }
-  if (status === 401 || status === 403) return '提供方拒绝了这次访问';
+  if (status === 401 || status === 403) return '密钥被拒绝。请核对密钥和地址。';
   if (status === 404) return '模型或地址不存在';
   return '模型服务暂时不可用';
 }

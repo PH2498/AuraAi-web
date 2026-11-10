@@ -1,20 +1,25 @@
+import { lazy, Suspense } from 'react';
 import { RouterProvider, createBrowserRouter, Outlet } from 'react-router-dom';
 import { AppShell } from '../components/app-shell/AppShell';
-import { ConversationsPage } from '../pages/ConversationsPage';
 import { HomePage } from '../pages/HomePage';
-import { MemoryPage } from '../pages/MemoryPage';
-import { SettingsPage } from '../pages/SettingsPage';
-import { TasksPage } from '../pages/TasksPage';
-import { VisionPage } from '../pages/VisionPage';
 import { Icon } from '../components/icon';
+import { ErrorBoundary } from './error-boundary';
 import { SessionProvider, useSession } from './session';
+
+const ConversationsPage = lazy(() => import('../pages/ConversationsPage').then((mod) => ({ default: mod.ConversationsPage })));
+const VisionPage = lazy(() => import('../pages/VisionPage').then((mod) => ({ default: mod.VisionPage })));
+const TasksPage = lazy(() => import('../pages/TasksPage').then((mod) => ({ default: mod.TasksPage })));
+const MemoryPage = lazy(() => import('../pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })));
+const SettingsPage = lazy(() => import('../pages/SettingsPage').then((mod) => ({ default: mod.SettingsPage })));
 
 function Frame() {
   const { toasts, dismissToast } = useSession();
   return (
     <>
       <AppShell>
-        <Outlet />
+        <Suspense fallback={<p className="route-wait">正在打开</p>}>
+          <Outlet />
+        </Suspense>
       </AppShell>
       <div className="toast-stack" role="status" aria-live="polite">
         {toasts.map((item) => (
@@ -66,5 +71,9 @@ const router = createBrowserRouter([
 ]);
 
 export function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <ErrorBoundary>
+      <RouterProvider router={router} />
+    </ErrorBoundary>
+  );
 }

@@ -12,7 +12,8 @@ import {
 import { createWebPlatform, PlatformCapabilityError } from '@aura/platform';
 import { ConfirmDialog, type ConfirmOptions } from '../components/confirm-dialog';
 import { LoginDialog } from '../components/login-dialog';
-import { currentAccount, loginAccount, logoutAccount, refreshOllama, type Account } from '../chat/api';
+import { currentAccount, listProviders, loginAccount, logoutAccount, refreshOllama, testProvider, type Account } from '../chat/api';
+import { isVisionModelName, localRef, type CloudEndpoint, type CloudProbe } from '../state/models';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
 import { listTasks } from '../tasks/api';
 
@@ -44,6 +45,10 @@ type Session = {
   stopSensing: () => void;
   ollamaReady: boolean;
   ollamaModels: string[];
+  endpoints: CloudEndpoint[];
+  cloudProbes: Record<string, CloudProbe>;
+  noteCloudProbe: (id: string, result: CloudProbe | null) => void;
+  reloadEndpoints: () => Promise<void>;
   account: Account | null;
   accountKnown: boolean;
   requireAccount: () => Promise<boolean>;
@@ -85,6 +90,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   dictatingRef.current = dictating;
   const [ollamaReady, setOllamaReady] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [endpoints, setEndpoints] = useState<CloudEndpoint[]>([]);
+  const [cloudProbes, setCloudProbes] = useState<Record<string, CloudProbe>>({});
+  const cloudProbeRef = useRef<Record<string, CloudProbe | 'pending'>>({});
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [conversation, setConversation] = useState({
@@ -378,12 +388,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const indexExpanded = viewportWidth < 1120 ? conversation.indexOpen : !conversation.collapsed;
   const contextExpanded = viewportWidth < 1440 ? conversation.contextOpen : !conversation.contextHidden;
 
+  const adoptListedModels = useCallback((names: string[]) => {
+    const current = settingsRef.current;
+    const patch: Partial<WebSettings> = {};
+    if (!current.chatModel && names[0]) patch.chatModel = localRef(names[0]);
+    if (!current.visionModel) {
+      const vision = names.find(isVisionModelName);
+      if (vision) patch.visionModel = localRef(vision);
+    }
+    if (patch.chatModel || patch.visionModel) updateSettings(patch);
+  }, [updateSettings]);
+
   const probeOllama = useCallback(async (url: string) => {
     if (account) {
       try {
-        const result = await refreshOllama(url, 'qwen2.5:7b');
+        const result = await refreshOllama(url);
         setOllamaReady(result.ok);
         setOllamaModels(result.models);
+        if (result.ok) adoptListedModels(result.models);
         return result.message;
       } catch (error) {
         setOllamaReady(false);
@@ -402,24 +424,79 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const names = (body.models ?? []).map((item) => item.name).filter((name): name is string => Boolean(name));
       setOllamaModels(names);
       setOllamaReady(true);
+      adoptListedModels(names);
       return names.length ? `已连接。这次探测成功，列出 ${names.length} 个模型。` : '已连接。这次探测成功，但没有列出模型。';
     } catch {
       setOllamaReady(false);
       setOllamaModels([]);
       return '没有连上。请确认 Ollama 已启动，并且地址允许网页访问。';
     }
-  }, [account]);
+  }, [account, adoptListedModels]);
 
   useEffect(() => {
     if (!account) return;
     void probeOllama(settings.ollamaUrl);
   }, [account, settings.ollamaUrl, probeOllama]);
 
+  const noteCloudProbe = useCallback((id: string, result: CloudProbe | null) => {
+    if (result === null) {
+      delete cloudProbeRef.current[id];
+      setCloudProbes((current) => {
+        if (!(id in current)) return current;
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+      return;
+    }
+    cloudProbeRef.current[id] = result;
+    setCloudProbes((current) => (current[id] === result ? current : { ...current, [id]: result }));
+  }, []);
+
+  const reloadEndpoints = useCallback(async () => {
+    if (!account) {
+      setEndpoints([]);
+      return;
+    }
+    const rows = await listProviders().catch(() => []);
+    setEndpoints(rows.filter((item) => item.provider === 'openai' && item.enabled));
+  }, [account]);
+
+  useEffect(() => {
+    void reloadEndpoints();
+  }, [reloadEndpoints]);
+
+  useEffect(() => {
+    if (!account) return;
+    let stop = false;
+    for (const item of endpoints) {
+      if (!item.keyConfigured || !item.defaultModel || cloudProbeRef.current[item.id]) continue;
+      cloudProbeRef.current[item.id] = 'pending';
+      void testProvider(item.id).then(
+        (result) => {
+          if (!stop) noteCloudProbe(item.id, result.ok ? 'ok' : 'fail');
+        },
+        () => {
+          if (!stop) noteCloudProbe(item.id, 'fail');
+        },
+      );
+    }
+    return () => {
+      stop = true;
+      for (const item of endpoints) {
+        if (cloudProbeRef.current[item.id] === 'pending') delete cloudProbeRef.current[item.id];
+      }
+    };
+  }, [account, endpoints, noteCloudProbe]);
+
   const logout = useCallback(async () => {
     await logoutAccount();
     setAccount(null);
     setOllamaReady(false);
     setOllamaModels([]);
+    setEndpoints([]);
+    cloudProbeRef.current = {};
+    setCloudProbes({});
   }, []);
 
   const dismissTask = useCallback((id: string) => {
@@ -501,6 +578,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stopSensing,
       ollamaReady,
       ollamaModels,
+      endpoints,
+      cloudProbes,
+      noteCloudProbe,
+      reloadEndpoints,
       account,
       accountKnown,
       requireAccount,
@@ -538,6 +619,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stopSensing,
       ollamaReady,
       ollamaModels,
+      endpoints,
+      cloudProbes,
+      noteCloudProbe,
+      reloadEndpoints,
       account,
       accountKnown,
       requireAccount,
