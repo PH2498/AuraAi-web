@@ -14,6 +14,8 @@ import { connectionLabel, describeChoice, localChatReady, resolveChat, type Clou
 import { STATE_LABEL, type WebSettings } from '../state/settings';
 
 type Stage = { id: string; label: string; status: 'pending' | 'active' | 'done' | 'fail' };
+type HomeTurn = { key: string; ask: string; answer: string; at: string; settled: boolean; stages: Stage[] };
+type HomeSession = { when: string; turns: HomeTurn[] };
 
 const THINKING: Stage[] = [
   { id: 'intent', label: '理解意图', status: 'pending' },
@@ -40,7 +42,8 @@ function greeting() {
 export function HomePage() {
   const { aura, setAura, sensing, dictating, toggleDictation, settings, ollamaReady, ollamaModels, endpoints, cloudProbes, noteCloudProbe, drawerOpen, setDrawerOpen, toast, requireAccount, account } = useSession();
   const [draft, setDraft] = useState('');
-  const [reading, setReading] = useState<{ ask: string; answer: string; at: string; when: string; settled: boolean; stages: Stage[] } | null>(null);
+  const [session, setSession] = useState<HomeSession | null>(null);
+  const conversationId = useRef<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [sessionQuery, setSessionQuery] = useState('');
   const [busy, setBusy] = useState(false);
@@ -52,17 +55,18 @@ export function HomePage() {
   const slot = useCoreSlot<HTMLButtonElement>(true);
   const pointer = useCorePointer(() => toggleDictation());
 
-  const suggesting = focused && !draft && !reading;
+  const suggesting = focused && !draft && !session;
   useEffect(() => {
-    document.body.classList.toggle('reading', Boolean(reading));
+    document.body.classList.toggle('reading', Boolean(session));
     document.body.classList.toggle('suggesting', suggesting);
     return () => {
       document.body.classList.remove('reading', 'suggesting');
     };
-  }, [reading, suggesting]);
+  }, [session, suggesting]);
   useEffect(() => {
     const clear = () => {
-      setReading(null);
+      conversationId.current = null;
+      setSession(null);
       setStages([]);
       setNotice(null);
     };
@@ -81,10 +85,17 @@ export function HomePage() {
       return;
     }
     void listConversations().then(setSaved).catch(() => setSaved([]));
-  }, [account, drawerOpen, reading?.settled]);
+  }, [account, drawerOpen, session?.turns.at(-1)?.settled]);
   const query = sessionQuery.trim();
   const savedSessions = saved.filter((item) => !query || item.title.includes(query));
   const sessions = CONVERSATIONS.filter((item) => !query || item.title.includes(query) || item.excerpt.includes(query));
+
+  const patchTurn = (key: string, patch: Partial<HomeTurn>) => {
+    setSession((current) => {
+      if (!current) return current;
+      return { ...current, turns: current.turns.map((turn) => (turn.key === key ? { ...turn, ...patch } : turn)) };
+    });
+  };
 
   const submit = (text: string, speakAfter = false) => {
     const ask = text.trim();
@@ -99,7 +110,13 @@ export function HomePage() {
       setStages([]);
       core.setTicks(0, 0);
       core.setAmplitude(0);
-      setReading({ ask, answer, ...stamp, settled: true, stages: THINKING.map((item) => ({ ...item, status: 'fail' })) });
+      setSession((current) => ({
+        when: current?.when ?? stamp.when,
+        turns: [
+          ...(current?.turns ?? []),
+          { key: `local-${Date.now()}`, ask, answer, at: stamp.at, settled: true, stages: THINKING.map((item) => ({ ...item, status: 'fail' as const })) },
+        ],
+      }));
       setNotice(null);
       setAura(state);
     };
@@ -115,10 +132,10 @@ export function HomePage() {
       }
       const cloud = target.cloud;
       const model = target.model;
+      const turnKey = `turn-${Date.now()}`;
       const controller = new AbortController();
       stopRef.current = controller;
       setBusy(true);
-      setReading(null);
       setNotice(null);
       setAura('thinking');
       core.setTicks(2, 0);
@@ -126,6 +143,10 @@ export function HomePage() {
         { id: 'intent', label: '理解意图', status: 'active' },
         { id: 'answer', label: '组织回答', status: 'pending' },
       ]);
+      setSession((current) => ({
+        when: current?.when ?? stamp.when,
+        turns: [...(current?.turns ?? []), { key: turnKey, ask, answer: '', at: stamp.at, settled: false, stages: THINKING.map((item) => ({ ...item })) }],
+      }));
       let answer = '';
       let frame = 0;
       let started = false;
@@ -143,7 +164,7 @@ export function HomePage() {
         });
       const paint = () => {
         frame = 0;
-        setReading((current) => (current && current.ask === ask ? { ...current, answer } : current));
+        patchTurn(turnKey, { answer });
       };
       const beginReply = () => {
         if (started) return;
@@ -152,7 +173,7 @@ export function HomePage() {
         setStages([]);
         core.setTicks(2, 2);
         setNotice(null);
-        setReading({ ask, answer, ...stamp, settled: false, stages: done });
+        patchTurn(turnKey, { stages: done });
         setAura('speaking');
         core.setAmplitude(0.45);
       };
@@ -165,10 +186,13 @@ export function HomePage() {
         ]);
         core.setTicks(2, 1);
         await streamReply(
-          { message: ask, provider: target.provider, providerId: target.providerId, model },
+          { message: ask, conversationId: conversationId.current ?? undefined, provider: target.provider, providerId: target.providerId, model },
           {
             signal: controller.signal,
-            onStart: () => beginReply(),
+            onStart: (event) => {
+              conversationId.current = event.conversationId;
+              beginReply();
+            },
             onDelta: (text) => {
               beginReply();
               answer += text;
@@ -180,7 +204,7 @@ export function HomePage() {
         if (target.providerId) noteCloudProbe(target.providerId, 'ok');
         if (frame) window.cancelAnimationFrame(frame);
         if (!started) beginReply();
-        setReading((current) => (current && current.ask === ask ? { ...current, answer, settled: true } : current));
+        patchTurn(turnKey, { answer, settled: true });
         setAura('idle');
         if (speakAfter && answer.trim()) {
           stopSpeech();
@@ -200,9 +224,13 @@ export function HomePage() {
         if (frame) window.cancelAnimationFrame(frame);
         const message = error instanceof Error ? error.message : '模型服务暂时不可用';
         if (controller.signal.aborted) {
-          if (started) {
-            setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || '已停止生成', settled: true } : current));
-          } else {
+          if (started) patchTurn(turnKey, { answer: answer || '已停止生成', settled: true });
+          else {
+            setSession((current) => {
+              if (!current) return current;
+              const turns = current.turns.filter((turn) => turn.key !== turnKey);
+              return turns.length ? { ...current, turns } : null;
+            });
             setDraft(ask);
             setNotice(null);
           }
@@ -211,9 +239,14 @@ export function HomePage() {
         }
         if (target.providerId) noteCloudProbe(target.providerId, 'fail');
         if (started) {
-          setReading((current) => (current && current.ask === ask ? { ...current, answer: answer || message, settled: true } : current));
+          patchTurn(turnKey, { answer: answer || message, settled: true });
           setAura('error');
         } else {
+          setSession((current) => {
+            if (!current) return current;
+            const turns = current.turns.filter((turn) => turn.key !== turnKey);
+            return turns.length ? { ...current, turns } : null;
+          });
           setDraft(ask);
           setStages((items) => items.map((item) => (item.status === 'active' ? { ...item, status: 'fail' } : item)));
           setNotice({ text: message, error: true });
@@ -282,99 +315,99 @@ export function HomePage() {
       </section>
 
       <section className="reply" aria-label="本次会话">
-        {reading ? (
+        {session ? (
           <>
             <div className="reply-head">
               <span className="meta">
-                本次会话 · {reading.when} · {reading.settled ? STATE_LABEL.idle : STATE_LABEL[aura]}
+                本次会话 · {session.when} · {session.turns.at(-1)?.settled ? STATE_LABEL.idle : STATE_LABEL[aura]}
               </span>
-              <button type="button" className="btn btn-sm btn-quiet" onClick={() => setReading(null)}>
+              <button
+                type="button"
+                className="btn btn-sm btn-quiet"
+                onClick={() => {
+                  conversationId.current = null;
+                  setSession(null);
+                  setStages([]);
+                  setNotice(null);
+                }}
+              >
                 <Icon name="square-pen" className="i i-14" />
                 新对话
               </button>
             </div>
-            <article className="turn">
-              <p className="who">你 · {reading.at}</p>
-              <p className="ask">{reading.ask}</p>
-              <div className="answer-wrap">
-                <div className="who">
-                  <svg className="mark" viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="3.6" fill="currentColor" />
-                    <ellipse
-                      cx="12"
-                      cy="12"
-                      rx="10"
-                      ry="4.4"
-                      transform="rotate(-28 12 12)"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                    />
-                  </svg>
-                  AURA · {describeChoice(settings.chatModel, endpoints).name}
+            {session.turns.map((turn) => (
+              <article className="turn chat-turn" key={turn.key}>
+                <div className="chat-user">
+                  <p className="chat-bubble">{turn.ask}</p>
                 </div>
-                <details className="activity" open={!reading.settled}>
-                  <summary>
-                    <Icon name={reading.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
-                    <span className="sum">{reading.settled ? (describeChoice(settings.chatModel, endpoints).icon === 'cloud' ? '云端模型回复' : '本机模型回复') : '正在生成'}</span>
-                    <Icon name="chevron-right" className="i i-14 chev" />
-                  </summary>
-                  <ol>
-                    {reading.stages.map((stage) => (
-                      <li key={stage.id} data-s={stage.status === 'active' ? 'active' : stage.status === 'fail' ? 'fail' : 'done'}>
-                        <Icon
-                          name={stage.status === 'fail' ? 'circle-alert' : stage.status === 'active' ? 'loader-circle' : 'circle-check'}
-                          className="i i-14"
-                        />
-                        <div>
-                          {stage.label}
-                          <div className="d">{stage.status === 'fail' ? '没有完成' : '已完成'}</div>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-                <div className={`answer${reading.settled ? '' : ' streaming'}`}>
-                  <Markdown text={reading.answer} />
+                <div className="chat-ai">
+                  <img className="chat-avatar" src="/logo/aura-app-icon.svg" alt="" />
+                  <div className="chat-name">AURA</div>
+                  <div className="chat-body">
+                  <details className="activity" open={!turn.settled}>
+                    <summary>
+                      <Icon name={turn.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
+                      <span className="sum">{turn.settled ? (describeChoice(settings.chatModel, endpoints).icon === 'cloud' ? '云端模型回复' : '本机模型回复') : '正在生成'}</span>
+                      <Icon name="chevron-right" className="i i-14 chev" />
+                    </summary>
+                    <ol>
+                      {turn.stages.map((stage) => (
+                        <li key={stage.id} data-s={stage.status === 'active' ? 'active' : stage.status === 'fail' ? 'fail' : 'done'}>
+                          <Icon
+                            name={stage.status === 'fail' ? 'circle-alert' : stage.status === 'active' ? 'loader-circle' : 'circle-check'}
+                            className="i i-14"
+                          />
+                          <div>
+                            {stage.label}
+                            <div className="d">{stage.status === 'fail' ? '没有完成' : '已完成'}</div>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </details>
+                  <div className={`answer${turn.settled ? '' : ' streaming'}`}>
+                    <Markdown text={turn.answer} />
+                  </div>
+                  <div className={`answer-actions${turn.settled ? ' show' : ''}`}>
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn-sm"
+                      aria-label="复制回复"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(turn.answer).then(
+                          () => toast('已复制'),
+                          () => toast('复制失败：剪贴板不可用'),
+                        );
+                      }}
+                    >
+                      <Icon name="copy" />
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn icon-btn-sm"
+                      aria-label="朗读回复"
+                      onClick={() => {
+                        const text = turn.answer.trim();
+                        if (!text) return;
+                        unlockSpeech();
+                        stopSpeech();
+                        setAura('speaking');
+                        void fetchSpeech(text, settings.rate || 1)
+                          .then((bytes) => playWav(bytes))
+                          .then(() => setAura('idle'))
+                          .catch(() => {
+                            toast('这一句没有读出来', { icon: 'circle-alert' });
+                            setAura('idle');
+                          });
+                      }}
+                    >
+                      <Icon name="volume-2" />
+                    </button>
+                  </div>
+                  </div>
                 </div>
-                <div className={`answer-actions${reading.settled ? ' show' : ''}`}>
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn-sm"
-                    aria-label="复制回复"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(reading.answer).then(
-                        () => toast('已复制'),
-                        () => toast('复制失败：剪贴板不可用'),
-                      );
-                    }}
-                  >
-                    <Icon name="copy" />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn icon-btn-sm"
-                    aria-label="朗读回复"
-                    onClick={() => {
-                      const text = reading.answer.trim();
-                      if (!text) return;
-                      unlockSpeech();
-                      stopSpeech();
-                      setAura('speaking');
-                      void fetchSpeech(text, settings.rate || 1)
-                        .then((bytes) => playWav(bytes))
-                        .then(() => setAura('idle'))
-                        .catch(() => {
-                          toast('这一句没有读出来', { icon: 'circle-alert' });
-                          setAura('idle');
-                        });
-                    }}
-                  >
-                    <Icon name="volume-2" />
-                  </button>
-                </div>
-              </div>
-            </article>
+              </article>
+            ))}
           </>
         ) : null}
       </section>

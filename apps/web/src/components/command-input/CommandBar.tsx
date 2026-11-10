@@ -259,7 +259,7 @@ export function CommandBar({
               <span className="tail">
                 <span className={`pill${ready ? ' ok' : ' warn'}`}>
                   <span className="dot" />
-                  {ready ? '已连接' : '未连通'}
+                  {ready ? '本机已连通' : '本机未连通'}
                 </span>
                 <Icon name="check" className="i check" />
               </span>

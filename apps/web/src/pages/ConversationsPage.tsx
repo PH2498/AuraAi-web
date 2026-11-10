@@ -6,7 +6,7 @@ import { CommandBar } from '../components/command-input/CommandBar';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { CONVERSATIONS } from '../fixtures/content';
-import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type ServerMessage } from '../chat/api';
+import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type ServerConversation, type ServerMessage } from '../chat/api';
 import { createMemory } from '../memory/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
@@ -18,7 +18,53 @@ const FRESH_SUGGESTIONS: [string, string][] = [
   ['code', '写一个 Electron 的全局快捷键示例'],
 ];
 
-type Thread = Omit<(typeof CONVERSATIONS)[number], 'id'> & { id: string; pinned: boolean };
+type Thread = Omit<(typeof CONVERSATIONS)[number], 'id'> & {
+  id: string;
+  pinned: boolean;
+  modelName?: string | null;
+  modelProvider?: string | null;
+};
+
+function asThread(item: ServerConversation): Thread {
+  return {
+    id: item.id,
+    title: item.title,
+    when: new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    group: '记录',
+    icon: 'messages-square',
+    excerpt: item.modelName ?? '已保存的对话',
+    ask: item.title,
+    answer: [],
+    pinned: false,
+    modelName: item.modelName,
+    modelProvider: item.modelProvider,
+  };
+}
+
+function savedModel(thread: Thread): { where: '本机' | '云端'; name: string } | null {
+  if (thread.modelProvider === 'ollama') return { where: '本机', name: thread.modelName || 'Ollama' };
+  if (thread.modelProvider === 'openai') return { where: '云端', name: thread.modelName || '云端接口' };
+  return null;
+}
+
+function threadTurns(history: ServerMessage[]): { key: string; ask: string; answer: string; streaming: boolean }[] {
+  const turns: { key: string; ask: string; answer: string; streaming: boolean }[] = [];
+  for (const item of history) {
+    if (item.role === 'user') {
+      turns.push({ key: item.id, ask: item.content.text, answer: '', streaming: false });
+      continue;
+    }
+    if (item.role !== 'assistant') continue;
+    const last = turns.at(-1);
+    if (!last || last.answer) {
+      turns.push({ key: item.id, ask: '', answer: item.content.text, streaming: item.status === 'streaming' });
+      continue;
+    }
+    last.answer = item.content.text;
+    last.streaming = item.status === 'streaming';
+  }
+  return turns;
+}
 
 export function ConversationsPage() {
   const { id } = useParams();
@@ -31,6 +77,7 @@ export function ConversationsPage() {
   const [locals, setLocals] = useState<Thread[]>([]);
   const [remote, setRemote] = useState<Thread[]>([]);
   const [history, setHistory] = useState<ServerMessage[]>([]);
+  const [usedMemory, setUsedMemory] = useState<{ id: string; content: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const stopRef = useRef<AbortController | null>(null);
   const [renaming, setRenaming] = useState(false);
@@ -74,6 +121,7 @@ export function ConversationsPage() {
   const fresh = !current;
   const selectedId = current?.id;
   const live = Boolean(current && (pendingLive || remote.some((item) => item.id === current.id)));
+  const model = current ? savedModel(current) : null;
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return library.filter((item) => !q || `${item.title} ${item.excerpt}`.toLowerCase().includes(q));
@@ -86,22 +134,27 @@ export function ConversationsPage() {
     }
     void listConversations()
       .then((rows) =>
-        setRemote(
-          rows.map((item) => ({
-            id: item.id,
-            title: item.title,
-            when: new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-            group: '记录',
-            icon: 'messages-square',
-            excerpt: item.modelName ? `${item.modelName}` : '已保存的对话',
-            ask: item.title,
-            answer: [] as string[],
-            pinned: false,
-          })),
-        ),
+        setRemote(rows.map(asThread)),
       )
       .catch(() => setRemote([]));
   }, [account, busy]);
+
+  useEffect(() => {
+    if (!live) {
+      setUsedMemory([]);
+      return;
+    }
+    const seen = new Set<string>();
+    const cited: { id: string; content: string }[] = [];
+    for (const message of history) {
+      for (const memory of message.content.memories ?? []) {
+        if (seen.has(memory.id)) continue;
+        seen.add(memory.id);
+        cited.push(memory);
+      }
+    }
+    setUsedMemory(cited);
+  }, [live, history]);
 
   useEffect(() => {
     if (busy) return;
@@ -150,21 +203,7 @@ export function ConversationsPage() {
   const reloadRemote = () => {
     if (!account) return;
     void listConversations()
-      .then((rows) =>
-        setRemote(
-          rows.map((item) => ({
-            id: item.id,
-            title: item.title,
-            when: new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-            group: '记录',
-            icon: 'messages-square',
-            excerpt: item.modelName ?? '已保存的对话',
-            ask: item.title,
-            answer: [] as string[],
-            pinned: false,
-          })),
-        ),
-      )
+      .then((rows) => setRemote(rows.map(asThread)))
       .catch(() => undefined);
   };
 
@@ -437,7 +476,7 @@ export function ConversationsPage() {
                   ) : (
                     <h2>{current.title}</h2>
                   )}
-                  <div className="meta">{live ? '本机模型' : '演示会话 · 模型未接入'}</div>
+                  <div className="meta">{live ? (model ? `${model.where} · ${model.name}` : '已保存的对话') : '演示会话 · 模型未接入'}</div>
                 </div>
                 <div className="acts">
                   <button
@@ -487,7 +526,12 @@ export function ConversationsPage() {
                   className="menu-item"
                   role="menuitem"
                   onClick={() => {
-                    const markdown = `# ${current.title}\n\n**你**：${current.ask}\n\n**AURA**：${[...current.answer, note].filter(Boolean).join('\n\n')}`;
+                    const body = live
+                      ? threadTurns(history)
+                          .map((turn) => `**你**：${turn.ask}\n\n**AURA**：${turn.answer}`)
+                          .join('\n\n')
+                      : `**你**：${current.ask}\n\n**AURA**：${[...current.answer, note].filter(Boolean).join('\n\n')}`;
+                    const markdown = `# ${current.title}\n\n${body}`;
                     void navigator.clipboard.writeText(markdown).then(
                       () => toast('已复制为 Markdown'),
                       () => toast('复制失败：剪贴板不可用', { icon: 'circle-alert' }),
@@ -572,73 +616,77 @@ export function ConversationsPage() {
             </div>
             <div className="stream">
               <div className="col">
-                <article className="ex">
-                  <p className="ask">{live ? history.filter((item) => item.role === 'user').at(-1)?.content.text : current.ask}</p>
-                  <div className={`answer${live && history.some((item) => item.status === 'streaming') ? ' streaming' : ''}`}>
-                    <Markdown
-                      text={
-                        live
-                          ? history
-                              .filter((item) => item.role === 'assistant')
-                              .map((item) => item.content.text)
-                              .filter(Boolean)
-                              .join('\n\n')
-                          : current.answer.join('\n\n')
-                      }
-                    />
-                    {note && !live ? <p>{note}</p> : null}
-                  </div>
-                  <div className="answer-actions">
-                    <button
-                      type="button"
-                      className="icon-btn icon-btn-sm"
-                      aria-label="复制"
-                      data-tip="复制"
-                      onClick={() => {
-                        const text = [...current.answer, note].filter(Boolean).join('\n\n');
-                        void navigator.clipboard.writeText(text).then(
-                          () => toast('已复制'),
-                          () => toast('复制失败：剪贴板不可用', { icon: 'circle-alert' }),
-                        );
-                      }}
-                    >
-                      <Icon name="copy" />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn icon-btn-sm"
-                      aria-label="重新生成"
-                      data-tip="重新生成"
-                      onClick={() => setNote('这是演示回复。模型还没有接入，这条内容没有发给任何服务。')}
-                    >
-                      <Icon name="rotate-ccw" />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-btn icon-btn-sm"
-                      aria-label="朗读"
-                      data-tip="朗读"
-                      onClick={() => {
-                        const text = [...current.answer, note].filter(Boolean).join('。').trim();
-                        if (!text) return;
-                        unlockSpeech();
-                        stopSpeech();
-                        setAura('speaking');
-                        void fetchSpeech(text, settings.rate || 1)
-                          .then((bytes) => playWav(bytes))
-                          .then(() => setAura('idle'))
-                          .catch(() => {
-                            toast('这一句没有读出来', { icon: 'circle-alert' });
-                            setAura('idle');
-                          });
-                      }}
-                    >
-                      <Icon name="volume-2" />
-                    </button>
-                    <span className="grow" />
-                    <span className="meta">{live ? '本机模型' : '未接入 · 演示'}</span>
-                  </div>
-                </article>
+                {(live ? threadTurns(history) : [{ key: current.id, ask: current.ask, answer: current.answer.join('\n\n'), streaming: false }]).map((turn, index, turns) => (
+                  <article className="ex chat-turn" key={turn.key}>
+                    {turn.ask ? (
+                      <div className="chat-user">
+                        <p className="chat-bubble">{turn.ask}</p>
+                      </div>
+                    ) : null}
+                    <div className="chat-ai">
+                      <img className="chat-avatar" src="/logo/aura-app-icon.svg" alt="" />
+                      <div className="chat-name">AURA</div>
+                      <div className="chat-body">
+                    <div className={`answer${turn.streaming ? ' streaming' : ''}`}>
+                      <Markdown text={turn.answer} />
+                      {note && !live && index === turns.length - 1 ? <p>{note}</p> : null}
+                    </div>
+                    <div className="answer-actions">
+                      <button
+                        type="button"
+                        className="icon-btn icon-btn-sm"
+                        aria-label="复制"
+                        data-tip="复制"
+                        onClick={() => {
+                          const text = [turn.answer, !live && index === turns.length - 1 ? note : ''].filter(Boolean).join('\n\n');
+                          void navigator.clipboard.writeText(text).then(
+                            () => toast('已复制'),
+                            () => toast('复制失败：剪贴板不可用', { icon: 'circle-alert' }),
+                          );
+                        }}
+                      >
+                        <Icon name="copy" />
+                      </button>
+                      {!live && index === turns.length - 1 ? (
+                        <button
+                          type="button"
+                          className="icon-btn icon-btn-sm"
+                          aria-label="重新生成"
+                          data-tip="重新生成"
+                          onClick={() => setNote('这是演示回复。模型还没有接入，这条内容没有发给任何服务。')}
+                        >
+                          <Icon name="rotate-ccw" />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="icon-btn icon-btn-sm"
+                        aria-label="朗读"
+                        data-tip="朗读"
+                        onClick={() => {
+                          const text = turn.answer.trim();
+                          if (!text) return;
+                          unlockSpeech();
+                          stopSpeech();
+                          setAura('speaking');
+                          void fetchSpeech(text, settings.rate || 1)
+                            .then((bytes) => playWav(bytes))
+                            .then(() => setAura('idle'))
+                            .catch(() => {
+                              toast('这一句没有读出来', { icon: 'circle-alert' });
+                              setAura('idle');
+                            });
+                        }}
+                      >
+                        <Icon name="volume-2" />
+                      </button>
+                      <span className="grow" />
+                      <span className="meta">{live ? describeChoice(settings.chatModel, endpoints).name : '未接入 · 演示'}</span>
+                    </div>
+                      </div>
+                    </div>
+                  </article>
+                ))}
               </div>
             </div>
           </>
@@ -674,13 +722,26 @@ export function ConversationsPage() {
             </section>
             <section>
               <h3>引用的记忆</h3>
-              <p className="none">这次没有用到记忆</p>
+              {live && usedMemory.length ? (
+                usedMemory.map((item) => (
+                  <div className="line memory" key={item.id}>
+                    <Icon name="brain" />
+                    <span>{item.content}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="none">{live ? '这次没有用到记忆' : '演示会话没有读取记忆'}</p>
+              )}
             </section>
             <section>
               <h3>隐私</h3>
               <p className="privacy">
                 <Icon name="shield-check" className="i i-14" />
-                <span>{live ? `这次对话发给${describeChoice(settings.chatModel, endpoints).where === '本地' ? '本机' : describeChoice(settings.chatModel, endpoints).where}的${describeChoice(settings.chatModel, endpoints).name}，并保存在你的账号里。没有调用工具，也没有读取记忆。` : '这次是演示会话，内容没有发给模型。'}</span>
+                <span>
+                  {live
+                    ? `这次对话发给${model ? `${model.where}的 ${model.name}` : `${describeChoice(settings.chatModel, endpoints).where === '本地' ? '本机' : describeChoice(settings.chatModel, endpoints).where}的 ${describeChoice(settings.chatModel, endpoints).name}`}，并保存在你的账号里。没有调用工具，${usedMemory.length ? `读了 ${usedMemory.length} 条已确认的记忆` : '没有读取记忆'}。`
+                    : '这次是演示会话，内容没有发给模型。'}
+                </span>
               </p>
             </section>
           </>

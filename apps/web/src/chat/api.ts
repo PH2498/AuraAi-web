@@ -11,7 +11,7 @@ export type ServerConversation = {
 export type ServerMessage = {
   id: string;
   role: string;
-  content: { text: string };
+  content: { text: string; memories?: { id: string; content: string }[] };
   sequence: number;
   status: string;
 };

@@ -6,6 +6,8 @@ import { fail } from '../../common/http';
 import { DatabaseService } from '../../database/database.service';
 import { conversations, messages } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
+import { activeMemoryRecords } from '../memory/memory.service';
+import { citedMemories } from '../memory/memory.policy';
 
 const CreateSchema = z.object({
   title: z.string().trim().min(1).max(120),
@@ -118,7 +120,14 @@ export class ConversationsService {
       .from(messages)
       .where(eq(messages.conversationId, conversationId))
       .orderBy(asc(messages.sequence));
-    return rows.map(presentMessage);
+    const remembered = await activeMemoryRecords(this.database, userId);
+    const transcript = rows.map((row) => row.content.text).filter(Boolean).join('\n');
+    const cited = citedMemories(remembered, transcript);
+    return rows.map((row) => {
+      const message = presentMessage(row);
+      if (row.role !== 'assistant' || cited.length === 0) return message;
+      return { ...message, content: { ...message.content, memories: cited } };
+    });
   }
 
   async addMessage(userId: string, conversationId: string, body: unknown) {

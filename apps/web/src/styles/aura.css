@@ -558,6 +558,16 @@ input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent);
 .dialog .ack { display: flex; gap: 10px; align-items: flex-start; margin-top: 18px; padding: 12px 14px; border-radius: 12px; background: var(--wash); border: 1px solid var(--border); font-size: 13.5px; cursor: pointer; }
 .dialog .ack input { margin-top: 2px; }
 
+/* conversation turns: user bubble on the right, AURA on the left */
+.chat-turn { display: flex; flex-direction: column; gap: 16px; }
+.chat-turn + .chat-turn { margin-top: 28px; }
+.chat-user { display: flex; justify-content: flex-end; }
+.chat-bubble { max-width: min(78%, 480px); margin: 0; padding: 10px 14px; border-radius: 18px 18px 6px 18px; background: var(--surface); border: 1px solid var(--border-strong); box-shadow: var(--sheen); font-size: 14.5px; line-height: 1.55; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-ai { display: grid; grid-template-columns: 28px minmax(0, 1fr); column-gap: 10px; row-gap: 6px; }
+.chat-avatar { width: 28px; height: 28px; border-radius: 8px; grid-row: 1; grid-column: 1; }
+.chat-name { grid-column: 2; min-height: 28px; display: flex; align-items: center; font-size: 14px; font-weight: 560; letter-spacing: -0.01em; }
+.chat-body { grid-column: 2; min-width: 0; }
+
 /* code (conversations, tasks) */
 .code { border-radius: 12px; border: 1px solid var(--border); background: color-mix(in oklch, var(--void) 70%, transparent); overflow: hidden; }
 .code-head { display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--border); font: 500 11.5px var(--font-mono); color: var(--muted); }

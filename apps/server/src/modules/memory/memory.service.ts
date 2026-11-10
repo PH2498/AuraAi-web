@@ -7,7 +7,7 @@ import { fail } from '../../common/http';
 import { DatabaseService } from '../../database/database.service';
 import { memories } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
-import { MEMORY_CATEGORIES, MEMORY_SOURCES, initialStatus } from './memory.policy';
+import { MEMORY_CATEGORIES, MEMORY_SOURCES, initialStatus, memoryContext } from './memory.policy';
 
 const CreateSchema = z.object({
   category: z.enum(MEMORY_CATEGORIES).default('pref'),
@@ -135,13 +135,16 @@ function toDto(row: MemoryRow): MemoryDto {
   };
 }
 
-export async function activeMemoryLines(database: DatabaseService, userId: string): Promise<string> {
-  const rows = await database.db
-    .select({ content: memories.content, status: memories.status })
+export async function activeMemoryRecords(database: DatabaseService, userId: string): Promise<{ id: string; content: string }[]> {
+  return database.db
+    .select({ id: memories.id, content: memories.content })
     .from(memories)
     .where(and(eq(memories.userId, userId), eq(memories.status, 'active')))
     .orderBy(desc(memories.pinned), desc(memories.updatedAt))
     .limit(12);
-  if (!rows.length) return '';
-  return `\n\n用户已经确认的记忆，只当作背景。待确认的记忆不在这里：\n${rows.map((item) => `- ${item.content}`).join('\n')}`;
+}
+
+export async function activeMemoryLines(database: DatabaseService, userId: string): Promise<string> {
+  const rows = await activeMemoryRecords(database, userId);
+  return memoryContext(rows.map((item) => ({ content: item.content, status: 'active' as const })));
 }

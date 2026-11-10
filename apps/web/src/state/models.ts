@@ -64,7 +64,7 @@ export function cloudItemStatus(
   if (localOnly) return { text: '仅本地', tone: 'muted' };
   if (!item.keyConfigured) return { text: '没有密钥', tone: 'warn' };
   if (!item.defaultModel) return { text: '未配置', tone: 'warn' };
-  if (probe === 'ok') return { text: '已连接', tone: 'ok' };
+  if (probe === 'ok') return { text: '已连通', tone: 'ok' };
   if (probe === 'fail') return { text: '未连通', tone: 'warn' };
   return { text: '未测试', tone: 'warn' };
 }
@@ -79,15 +79,15 @@ export function connectionLabel(
   const parsed = parseModelRef(settings.chatModel);
   if (!parsed) return { ok: false, text: '未配置' };
   if (parsed.kind === 'local') {
-    return localChatReady(settings, ollamaReady, names) ? { ok: true, text: '已连接' } : { ok: false, text: '未配置' };
+    return localChatReady(settings, ollamaReady, names) ? { ok: true, text: '本机已连通' } : { ok: false, text: '本机未连通' };
   }
   if (settings.runMode === 'local-only') return { ok: false, text: '仅本地' };
   const endpoint = endpoints.find((item) => item.id === parsed.id);
   if (!endpoint || !endpoint.keyConfigured || !endpoint.defaultModel) return { ok: false, text: '未配置' };
   const probe = probes[endpoint.id];
-  if (probe === 'ok') return { ok: true, text: '已连接' };
-  if (probe === 'fail') return { ok: false, text: '连接失败' };
-  return { ok: false, text: '未测试' };
+  if (probe === 'ok') return { ok: true, text: '云端已连通' };
+  if (probe === 'fail') return { ok: false, text: '云端未连通' };
+  return { ok: false, text: '云端未测试' };
 }
 
 export type ChatTarget =
