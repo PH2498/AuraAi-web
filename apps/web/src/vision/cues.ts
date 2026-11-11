@@ -2,15 +2,29 @@ import { toneContext } from './playback';
 
 let bed: { stop: () => void } | null = null;
 
-function tone(ctx: AudioContext, frequency: number, when: number, duration: number, peak: number) {
+const NOTES = [196, 247, 220, 174];
+
+function warm(ctx: AudioContext): BiquadFilterNode {
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 340;
+  filter.Q.value = 0.4;
+  return filter;
+}
+
+function soft(ctx: AudioContext, frequency: number, when: number, duration: number, peak: number) {
   const osc = ctx.createOscillator();
+  const filter = warm(ctx);
   const gain = ctx.createGain();
   osc.type = 'sine';
   osc.frequency.setValueAtTime(frequency, when);
+  osc.frequency.linearRampToValueAtTime(frequency * 1.02, when + duration * 0.45);
+  osc.frequency.linearRampToValueAtTime(frequency * 0.99, when + duration);
   gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), when + Math.min(0.03, duration * 0.3));
+  gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), when + 0.16);
   gain.gain.exponentialRampToValueAtTime(0.0001, when + duration);
-  osc.connect(gain);
+  osc.connect(filter);
+  filter.connect(gain);
   gain.connect(ctx.destination);
   osc.start(when);
   osc.stop(when + duration + 0.02);
@@ -20,7 +34,7 @@ export function playAnalyzeStart(): void {
   const ctx = toneContext();
   if (!ctx) return;
   try {
-  playStart(ctx);
+    playStart(ctx);
   } catch {
     // 音效失败时，分析照常进行。
   }
@@ -28,19 +42,8 @@ export function playAnalyzeStart(): void {
 
 function playStart(ctx: AudioContext): void {
   const now = ctx.currentTime;
-  const osc = ctx.createOscillator();
-  const gain = ctx.createGain();
-  osc.type = 'sine';
-  osc.frequency.setValueAtTime(340, now);
-  osc.frequency.exponentialRampToValueAtTime(920, now + 0.2);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.1, now + 0.03);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
-  osc.connect(gain);
-  gain.connect(ctx.destination);
-  osc.start(now);
-  osc.stop(now + 0.28);
-  tone(ctx, 460, now + 0.12, 0.18, 0.04);
+  soft(ctx, 174, now, 0.72, 0.04);
+  soft(ctx, 220, now + 0.36, 0.64, 0.028);
 }
 
 export function startAnalyzeBed(): void {
@@ -48,46 +51,46 @@ export function startAnalyzeBed(): void {
   const ctx = toneContext();
   if (!ctx) return;
   try {
-  playBed(ctx);
+    playBed(ctx);
   } catch {
     // 等待音效失败时，分析照常进行。
   }
 }
 
 function playBed(ctx: AudioContext): void {
+  const filter = warm(ctx);
   const drone = ctx.createGain();
   drone.gain.value = 0.0001;
-  drone.connect(ctx.destination);
+  drone.connect(filter);
+  filter.connect(ctx.destination);
   const low = ctx.createOscillator();
-  const high = ctx.createOscillator();
   low.type = 'sine';
-  high.type = 'sine';
-  low.frequency.value = 196;
-  high.frequency.value = 294;
+  low.frequency.value = 147;
   low.connect(drone);
-  high.connect(drone);
   const lfo = ctx.createOscillator();
   const depth = ctx.createGain();
-  lfo.frequency.value = 1.35;
-  depth.gain.value = 0.016;
+  lfo.frequency.value = 0.22;
+  depth.gain.value = 0.006;
   lfo.connect(depth);
   depth.connect(drone.gain);
   const now = ctx.currentTime;
   drone.gain.setValueAtTime(0.0001, now);
-  drone.gain.exponentialRampToValueAtTime(0.045, now + 0.28);
+  drone.gain.exponentialRampToValueAtTime(0.022, now + 0.45);
   low.start(now);
-  high.start(now);
   lfo.start(now);
 
   let stopped = false;
+  let step = 0;
   let timer = 0;
-  const pulse = () => {
+  const phrase = () => {
     if (stopped) return;
-    const at = ctx.currentTime;
-    tone(ctx, 740, at, 0.09, 0.07);
-    timer = window.setTimeout(pulse, 720);
+    const note = NOTES[step % NOTES.length] ?? 196;
+    const accent = step % 2 === 0 ? 0.04 : 0.026;
+    soft(ctx, note, ctx.currentTime + 0.02, 0.78, accent);
+    step += 1;
+    timer = window.setTimeout(phrase, 860);
   };
-  timer = window.setTimeout(pulse, 260);
+  timer = window.setTimeout(phrase, 240);
 
   const stop = () => {
     if (stopped) return;
@@ -96,20 +99,20 @@ function playBed(ctx: AudioContext): void {
     const at = ctx.currentTime;
     depth.gain.cancelScheduledValues(at);
     depth.gain.setValueAtTime(depth.gain.value, at);
-    depth.gain.linearRampToValueAtTime(0, at + 0.1);
+    depth.gain.linearRampToValueAtTime(0, at + 0.18);
     drone.gain.cancelScheduledValues(at);
     const current = Math.max(drone.gain.value, 0.0001);
     drone.gain.setValueAtTime(current, at);
-    drone.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+    drone.gain.exponentialRampToValueAtTime(0.0001, at + 0.36);
     window.setTimeout(() => {
-      for (const osc of [low, high, lfo]) {
+      for (const osc of [low, lfo]) {
         try {
           osc.stop();
         } catch {
           // 已经停过。
         }
       }
-    }, 160);
+    }, 420);
     if (bed?.stop === stop) bed = null;
   };
   bed = { stop };
