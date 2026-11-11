@@ -1,6 +1,12 @@
+export interface ChatImage {
+  mime: 'image/jpeg' | 'image/png' | 'image/webp';
+  base64: string;
+}
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  images?: ChatImage[];
 }
 
 export interface ChatRequest {

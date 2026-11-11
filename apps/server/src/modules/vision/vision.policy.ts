@@ -2,6 +2,12 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MIN_INTERVAL_MS = 2000;
 
 const VISION_NAMES = ['llava', 'moondream', 'minicpm-v', 'bakllava', 'qwen2.5vl', 'qwen2-vl', 'qwen3-vl', 'llama3.2-vision', 'internvl', 'granite3.2-vision'];
+const CLOUD_VISION = ['gpt-4o', 'gpt-4.1', 'gemini', 'claude-3', 'claude-4', 'pixtral', 'deepseek-flash', 'deepseek-v4-flash'];
+
+export function modelCanSee(model: string): boolean {
+  const lowered = model.toLowerCase();
+  return [...VISION_NAMES, ...CLOUD_VISION].some((hint) => lowered.includes(hint));
+}
 
 export function imageKind(bytes: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' | null {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';

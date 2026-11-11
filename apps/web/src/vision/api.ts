@@ -30,6 +30,29 @@ export async function fetchSpeech(text: string, rate: number): Promise<ArrayBuff
   return response.arrayBuffer();
 }
 
+export async function frameFromStream(stream: MediaStream): Promise<Blob> {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.srcObject = stream;
+  await video.play();
+  try {
+    if (!video.videoWidth) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => reject(new Error('画面还没有准备好')), 4000);
+        video.onloadeddata = () => {
+          window.clearTimeout(timer);
+          resolve();
+        };
+      });
+    }
+    return await captureFrame(video);
+  } finally {
+    video.pause();
+    video.srcObject = null;
+  }
+}
+
 export function captureFrame(video: HTMLVideoElement): Promise<Blob> {
   const width = video.videoWidth;
   const height = video.videoHeight;

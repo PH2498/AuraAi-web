@@ -627,7 +627,7 @@ export function SettingsPage() {
               <h2>隐私与权限</h2>
               <p>使用统计保持关闭。网页不会发送使用数据。</p>
             </header>
-            <Row query={query} find="上传 云端 同意" title="云端上传" desc="视觉模型选了云端、并且点「分析这一帧」时，如何征得同意。本机看图不走这条。">
+              <Row query={query} find="上传 云端 同意" title="云端上传" desc="点「分析这一帧」时如何征得同意。对话里发送的画面直接交给能看图的模型。选「不允许上传」时，这两处都不会把画面发给云端。对话里的画面和文档会留在这次会话里。本机看图不走这条。">
               <Select value={settings.uploadAsk} label="云端上传" onChange={(value) => onChange({ uploadAsk: value as WebSettings['uploadAsk'] })}>
                 <option value="ask">每次询问</option>
                 <option value="always">这次会话内记住允许</option>

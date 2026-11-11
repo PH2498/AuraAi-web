@@ -30,6 +30,8 @@ import { VoiceModule } from './modules/voice/voice.module';
             'req.body.password',
             'req.body.apiKey',
             'req.body.message',
+            'req.body.images',
+            'req.body.display',
           ],
           remove: true,
         },

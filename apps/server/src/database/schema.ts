@@ -48,7 +48,7 @@ export const messages = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: 'cascade' }),
     role: text('role').notNull(),
-    content: jsonb('content').$type<{ text: string }>().notNull(),
+    content: jsonb('content').$type<{ text: string; display?: string; attachments?: { id?: string; name: string; type: 'image' | 'file'; mime?: string }[] }>().notNull(),
     sequence: integer('sequence').notNull(),
     status: text('status').notNull().default('complete'),
     tokenUsage: jsonb('token_usage').$type<{ inputTokens?: number; outputTokens?: number } | null>(),

@@ -21,9 +21,23 @@ export interface PlatformAdapter {
   openExternal(url: string): Promise<void>;
 }
 
+interface FocusController {
+  setFocusBehavior(behavior: 'no-focus-change'): void;
+}
+
+interface FocusControllerConstructor {
+  new (): FocusController;
+}
+
+interface DisplayMediaOptions {
+  audio?: boolean;
+  video?: boolean;
+  controller?: FocusController;
+}
+
 interface MediaDeviceHost {
   getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
-  getDisplayMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>;
+  getDisplayMedia?: (options: DisplayMediaOptions) => Promise<MediaStream>;
 }
 
 interface NotificationHost {
@@ -34,6 +48,7 @@ interface NotificationHost {
 
 export interface PlatformHost {
   navigator: { mediaDevices?: MediaDeviceHost };
+  CaptureController?: FocusControllerConstructor;
   Notification?: NotificationHost;
   open?: (url: string) => void;
 }
@@ -54,8 +69,10 @@ function defaultHost(): PlatformHost {
     return { navigator: {} };
   }
 
+  const capture = window as Window & { CaptureController?: FocusControllerConstructor };
   return {
     navigator: window.navigator,
+    CaptureController: capture.CaptureController,
     Notification: window.Notification,
     open: (url) => {
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -68,26 +85,50 @@ async function requestStream(
   kind: 'camera' | 'microphone' | 'screen',
 ): Promise<MediaStream> {
   const devices = host.navigator.mediaDevices;
-  const request =
-    kind === 'screen'
-      ? devices?.getDisplayMedia?.bind(devices)
-      : devices?.getUserMedia?.bind(devices);
-
-  if (!request) {
-    throw new PlatformCapabilityError('MEDIA_UNSUPPORTED', unsupportedMessage(kind));
+  if (kind === 'screen') {
+    const request = devices?.getDisplayMedia?.bind(devices);
+    if (!request) throw new PlatformCapabilityError('MEDIA_UNSUPPORTED', unsupportedMessage(kind));
+    return captureScreen(host, request);
   }
+
+  const request = devices?.getUserMedia?.bind(devices);
+  if (!request) throw new PlatformCapabilityError('MEDIA_UNSUPPORTED', unsupportedMessage(kind));
 
   const constraints: MediaStreamConstraints =
     kind === 'microphone' ? { audio: true, video: false } : { audio: false, video: true };
 
+  return mapMediaError(kind, request(constraints));
+}
+
+async function captureScreen(
+  host: PlatformHost,
+  request: (options: DisplayMediaOptions) => Promise<MediaStream>,
+): Promise<MediaStream> {
+  const Controller = host.CaptureController;
+  const options: DisplayMediaOptions = { audio: false, video: true };
+  if (!Controller) return mapMediaError('screen', request(options));
+
+  const controller = new Controller();
+  options.controller = controller;
+  const pending = request(options);
   try {
-    return await request(constraints);
-  } catch (error) {
+    controller.setFocusBehavior('no-focus-change');
+  } catch {
+    // 浏览器若不允许提前指定焦点，共享仍然继续。
+  }
+  return mapMediaError('screen', pending);
+}
+
+function mapMediaError(
+  kind: 'camera' | 'microphone' | 'screen',
+  pending: Promise<MediaStream>,
+): Promise<MediaStream> {
+  return pending.catch((error: unknown) => {
     if (isDenied(error)) {
       throw new PlatformCapabilityError('MEDIA_PERMISSION_DENIED', deniedMessage(kind));
     }
     throw new PlatformCapabilityError('MEDIA_UNSUPPORTED', unsupportedMessage(kind));
-  }
+  });
 }
 
 async function notify(host: PlatformHost, input: { title: string; body: string }): Promise<void> {

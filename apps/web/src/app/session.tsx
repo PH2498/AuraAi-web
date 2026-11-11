@@ -17,6 +17,7 @@ import { isVisionModelName, localRef, type CloudEndpoint, type CloudProbe } from
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
 import { listMemories } from '../memory/api';
 import { encodeWav } from '../voice/wav';
+import { frameFromStream } from '../vision/api';
 import { listTasks } from '../tasks/api';
 
 const platform = createWebPlatform();
@@ -40,6 +41,7 @@ type Session = {
   dictating: boolean;
   levelRef: RefObject<number>;
   toggleSensor: (kind: Sensor) => Promise<SensorResult>;
+  captureScreenFrame: () => Promise<Blob>;
   toggleDictation: () => void;
   startVoiceMeter: () => void;
   stopSensing: () => void;
@@ -89,6 +91,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [dictating, setDictating] = useState(false);
   const dictatingRef = useRef(false);
   dictatingRef.current = dictating;
+  const auraRef = useRef(aura);
+  auraRef.current = aura;
   const [ollamaReady, setOllamaReady] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [endpoints, setEndpoints] = useState<CloudEndpoint[]>([]);
@@ -328,7 +332,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async (kind: Sensor): Promise<SensorResult> => {
       if (streams[kind]) {
         stopKind(kind);
-        if (kind === 'mic') setAura('idle');
+        const visionStillOn = (kind !== 'cam' && Boolean(streams.cam)) || (kind !== 'screen' && Boolean(streams.screen));
+        const micStillOn = (kind !== 'mic' && Boolean(streams.mic)) || dictatingRef.current;
+        if (auraRef.current === 'vision' || auraRef.current === 'listening') {
+          setAura(visionStillOn ? 'vision' : micStillOn ? 'listening' : 'idle');
+        }
         return { ok: true, active: false };
       }
       try {
@@ -344,9 +352,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               current[kind]?.getTracks().forEach((item) => item.stop());
               const next = { ...current, [kind]: null };
               const visionStillOn = Boolean(next.cam || next.screen);
-              if (kind === 'mic') {
-                if (!dictatingRef.current) setAura('idle');
-              } else if (!visionStillOn) setAura('idle');
+              const micStillOn = Boolean(next.mic) || dictatingRef.current;
+              if ((auraRef.current === 'vision' || auraRef.current === 'listening') && kind !== 'mic') {
+                setAura(visionStillOn ? 'vision' : micStillOn ? 'listening' : 'idle');
+              } else if (kind === 'mic' && !dictatingRef.current && auraRef.current === 'listening') {
+                setAura(visionStillOn ? 'vision' : 'idle');
+              }
               return next;
             });
             if (kind === 'mic') stopAudio();
@@ -375,7 +386,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           pump();
         } else {
           setAura('vision');
-          toast(kind === 'cam' ? '摄像头已开启。只有点「分析这一帧」才会上传这一帧。' : '屏幕已共享。只有点「分析这一帧」才会上传这一帧。');
+          toast(kind === 'cam' ? '摄像头已开启。拍下后再发送，这一帧会保存在这次对话里。' : '屏幕保持共享。发送消息时会附上当前画面，手动关闭后才会停止。');
         }
         return { ok: true, active: true };
       } catch (error) {
@@ -387,6 +398,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     },
     [stopKind, streams, toast],
   );
+
+  const captureScreenFrame = useCallback(async () => {
+    const existing = streams.screen;
+    if (existing) return frameFromStream(existing);
+    const stream = await platform.requestScreenCapture();
+    try {
+      return await frameFromStream(stream);
+    } finally {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  }, [streams.screen]);
 
   const toggleConversationIndex = useCallback(() => {
     setConversation((current) =>
@@ -622,6 +644,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       dictating,
       levelRef,
       toggleSensor,
+      captureScreenFrame,
       toggleDictation,
       startVoiceMeter,
       stopSensing,
@@ -662,6 +685,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       sensing,
       dictating,
       toggleSensor,
+      captureScreenFrame,
       toggleDictation,
       startVoiceMeter,
       stopSensing,

@@ -99,4 +99,39 @@ describe('provider adapters', () => {
     const health = await adapter.healthCheck('deepseek-flash', AbortSignal.timeout(5_000));
     expect(health).toEqual({ ok: false, message: '接口已连通，但没有列出模型 deepseek-flash' });
   });
+
+  it('把画面放进看图请求，文字消息仍是纯文本', async () => {
+    let ollama = '';
+    let openai = '';
+    const ollamaServer = await listen((body) => {
+      ollama = body;
+      return { status: 200, type: 'application/x-ndjson', body: `${JSON.stringify({ message: { content: '看到了' }, done: true })}\n` };
+    });
+    const openaiServer = await listen((body) => {
+      openai = body;
+      return { status: 200, type: 'text/event-stream', body: 'data: {"choices":[{"delta":{"content":"看到了"}}]}\n\ndata: [DONE]\n\n' };
+    });
+    try {
+      const image = { mime: 'image/jpeg' as const, base64: 'aGVsbG8=' };
+      for await (const _event of new OllamaAdapter(ollamaServer.url).stream(
+        { model: 'qwen2.5vl:3b', messages: [{ role: 'user', content: '看', images: [image] }] },
+        AbortSignal.timeout(5_000),
+      )) {
+        // 读完即可。
+      }
+      for await (const _event of new OpenAiAdapter(openaiServer.url, 'sk-test-value').stream(
+        { model: 'gpt-4o', messages: [{ role: 'user', content: '只是文字' }, { role: 'user', content: '看', images: [image] }] },
+        AbortSignal.timeout(5_000),
+      )) {
+        // 读完即可。
+      }
+      expect(ollama).toContain('"images":["aGVsbG8="]');
+      expect(openai).toContain('data:image/jpeg;base64,aGVsbG8=');
+      expect(openai).toContain('"content":"只是文字"');
+      expect(openai).not.toContain('sk-test-value');
+    } finally {
+      await new Promise<void>((resolve) => ollamaServer.server.close(() => resolve()));
+      await new Promise<void>((resolve) => openaiServer.server.close(() => resolve()));
+    }
+  });
 });

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, max } from 'drizzle-orm';
+import { and, asc, eq, max, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { fail } from '../../common/http';
@@ -10,9 +10,13 @@ import { ENV } from '../../config/config.module';
 import type { AppEnv } from '../../config/env';
 import { AuditService } from '../audit/audit.service';
 import { activeMemoryLines } from '../memory/memory.service';
+import { deleteAttachmentFiles, readAttachmentFile, saveAttachmentFiles } from './attachment-files';
+import { extractDocumentText } from './document-text';
+import { forgetAttachments, peekAttachments } from './frames';
 import { OllamaAdapter } from './ollama.adapter';
 import { OpenAiAdapter } from './openai.adapter';
 import type { ChatMessage, ModelProvider } from './provider';
+import { modelCanSee } from '../vision/vision.policy';
 
 const ChatSchema = z.object({
   conversationId: z.string().uuid().optional(),
@@ -20,6 +24,9 @@ const ChatSchema = z.object({
   provider: z.enum(['ollama', 'openai']).optional(),
   model: z.string().trim().min(1).max(200).optional(),
   message: z.string().trim().min(1).max(20_000),
+  display: z.string().trim().min(1).max(20_000).optional(),
+  images: z.array(z.object({ id: z.string().uuid() })).max(4).optional(),
+  attachments: z.array(z.object({ id: z.string().uuid() })).max(8).optional(),
 });
 
 export type StreamWrite = (event: string, data: Record<string, unknown>) => void;
@@ -33,6 +40,7 @@ type Prepared = {
   model: string;
   messages: ChatMessage[];
   providerName: 'ollama' | 'openai';
+  imageCount: number;
 };
 
 const runs = new Map<string, AbortController>();
@@ -57,6 +65,21 @@ export class AiService {
     }
     const model = parsed.data.model || config.model;
     if (!model) fail(409, 'PROVIDER_NOT_CONFIGURED', '还没有选择模型。');
+    const requestedIds = [
+      ...new Set([
+        ...(parsed.data.attachments?.map((item) => item.id) ?? []),
+        ...(parsed.data.images?.map((item) => item.id) ?? []),
+      ]),
+    ];
+    const held = peekAttachments(userId, requestedIds);
+    if (requestedIds.length > 0 && held.length !== requestedIds.length) {
+      fail(400, 'ATTACHMENT_EXPIRED', '附件已经过期。请重新附上，这一条没有发出去。');
+    }
+    const pictures = held.filter((item) => item.kind === 'image');
+    if (pictures.length > 0 && !modelCanSee(model)) {
+      forgetAttachments(userId, requestedIds);
+      fail(409, 'VISION_REQUIRED', '这个模型不能看图。画面没有发出去，也没有保存。');
+    }
 
     const conversationId = parsed.data.conversationId ?? randomUUID();
     const created = !parsed.data.conversationId;
@@ -64,7 +87,7 @@ export class AiService {
       await this.database.db.insert(conversations).values({
         id: conversationId,
         userId,
-        title: parsed.data.message.slice(0, 80),
+        title: (parsed.data.display || parsed.data.message).slice(0, 80),
         modelProvider: config.provider,
         modelName: model,
       });
@@ -93,24 +116,37 @@ export class AiService {
     let sequence = current?.value ?? 0;
     const userMessageId = randomUUID();
     const assistantMessageId = randomUUID();
-    await this.database.db.insert(messages).values([
-      {
-        id: userMessageId,
-        conversationId,
-        role: 'user',
-        content: { text: parsed.data.message },
-        sequence: ++sequence,
-        status: 'complete',
-      },
-      {
-        id: assistantMessageId,
-        conversationId,
-        role: 'assistant',
-        content: { text: '' },
-        sequence: ++sequence,
-        status: 'streaming',
-      },
-    ]);
+    const messageText = await messageWithFiles(parsed.data.message, held.filter((item) => item.kind === 'file'));
+    const storedAttachments = held.map((item) => ({ id: item.id, name: item.name, type: item.kind, mime: item.mime }));
+    if (held.length) await saveAttachmentFiles(userId, held.map((item) => ({ id: item.id, bytes: item.bytes })));
+    try {
+      await this.database.db.insert(messages).values([
+        {
+          id: userMessageId,
+          conversationId,
+          role: 'user',
+          content: {
+            text: messageText,
+            ...(parsed.data.display ? { display: parsed.data.display } : {}),
+            ...(storedAttachments.length ? { attachments: storedAttachments } : {}),
+          },
+          sequence: ++sequence,
+          status: 'complete',
+        },
+        {
+          id: assistantMessageId,
+          conversationId,
+          role: 'assistant',
+          content: { text: '' },
+          sequence: ++sequence,
+          status: 'streaming',
+        },
+      ]);
+    } catch (error) {
+      await deleteAttachmentFiles(userId, held.map((item) => item.id));
+      throw error;
+    }
+    forgetAttachments(userId, requestedIds);
 
     const remembered = await activeMemoryLines(this.database, userId);
     const prior: ChatMessage[] = [
@@ -118,7 +154,15 @@ export class AiService {
       ...history
         .filter((item) => item.status === 'complete' && (item.role === 'user' || item.role === 'assistant') && item.content.text)
         .map((item) => ({ role: item.role as 'user' | 'assistant', content: item.content.text })),
-      { role: 'user', content: parsed.data.message },
+      {
+        role: 'user',
+        content: pictures.length
+          ? `${messageText}\n\n（这个问题附有 ${pictures.length} 张画面。请根据画面回答，不要说自己没看到。）`
+          : messageText,
+        ...(pictures.length
+          ? { images: pictures.map((frame) => ({ mime: frame.mime as 'image/jpeg' | 'image/png' | 'image/webp', base64: frame.bytes.toString('base64') })) }
+          : {}),
+      },
     ];
 
     return {
@@ -130,7 +174,26 @@ export class AiService {
       model,
       messages: prior,
       providerName: config.provider,
+      imageCount: pictures.length,
     };
+  }
+
+  async openAttachment(userId: string, id: string): Promise<{ bytes: Buffer; mime: string; name: string } | null> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return null;
+    const found = await this.database.db.execute(sql`
+      select elem->>'name' as name, elem->>'mime' as mime
+      from messages m
+      inner join conversations c on c.id = m.conversation_id
+      cross join lateral jsonb_array_elements(coalesce(m.content->'attachments', '[]'::jsonb)) as elem
+      where c.user_id = ${userId}::uuid
+        and elem->>'id' = ${id}
+      limit 1
+    `);
+    const row = ('rows' in found ? found.rows[0] : undefined) as { name?: string; mime?: string } | undefined;
+    if (!row?.mime || !row.name) return null;
+    const bytes = await readAttachmentFile(userId, id);
+    if (!bytes) return null;
+    return { bytes, mime: row.mime, name: row.name };
   }
 
   async stream(prepared: Prepared, clientSignal: AbortSignal, write: StreamWrite): Promise<void> {
@@ -200,6 +263,7 @@ export class AiService {
         durationMs: Date.now() - started,
         inputTokens: inputTokens ?? null,
         outputTokens: outputTokens ?? null,
+        images: prepared.imageCount,
       },
     });
     if (failed && status === 'error') {
@@ -259,6 +323,18 @@ function classify(error: unknown): { code: string; message: string } {
     return { code: 'CANCELLED', message: '已停止生成' };
   }
   return { code: 'PROVIDER_ERROR', message: '模型服务暂时不可用' };
+}
+
+async function messageWithFiles(message: string, files: { name: string; bytes: Buffer; mime: string }[]): Promise<string> {
+  const notes: string[] = [];
+  for (const file of files) {
+    if (message.includes(`【附件 ${file.name}】`)) continue;
+    const extracted = await extractDocumentText(file.bytes, file.mime);
+    const body = extracted?.trim();
+    notes.push(body ? `【附件 ${file.name}】\n${body.slice(0, 12_000)}` : `【附件 ${file.name}】这份文件已保存在对话里。`);
+  }
+  if (!notes.length) return message;
+  return `${message}\n\n${notes.join('\n\n')}`.slice(0, 20_000);
 }
 
 function abortReason(signal: AbortSignal): 'timeout' | 'cancelled' {

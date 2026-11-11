@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
-import { cloudItemStatus, cloudRef, describeChoice, localRef, parseModelRef } from '../../state/models';
+import { attachmentFromFile, imageAttachment, MAX_ATTACHMENTS, MAX_IMAGES, type ChatAttachment } from '../../chat/attachments';
+import { cloudItemStatus, cloudRef, describeChoice, localRef, parseModelRef, replyTarget } from '../../state/models';
+import { frameFromStream } from '../../vision/api';
 import { appendSpeech, startBrowserRecognition } from '../../voice/recognition';
 import { transcribeClip, warmVoice } from '../../voice/transcribe';
+import { AttachmentPreview, previewKind } from '../image-preview';
 import { Icon } from '../icon';
 
 export function CommandBar({
@@ -16,7 +19,7 @@ export function CommandBar({
 }: {
   value: string;
   onChange: (value: string) => void;
-  onSubmit: (files: string[]) => void;
+  onSubmit: (attachments: ChatAttachment[]) => void | boolean | Promise<void | boolean>;
   onStop?: () => void;
   busy?: boolean;
   placeholder?: string;
@@ -24,7 +27,10 @@ export function CommandBar({
   const { settings, updateSettings, ollamaReady, ollamaModels, endpoints, cloudProbes, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, levelRef, toast } = useSession();
   const [open, setOpen] = useState(false);
   const [finder, setFinder] = useState(false);
-  const [files, setFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<ChatAttachment[]>([]);
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  const filesNow = useRef<ChatAttachment[]>([]);
+  filesNow.current = files;
   const stopDictation = useRef(toggleDictation);
   const writeDraft = useRef(onChange);
   const beginMeter = useRef(startVoiceMeter);
@@ -158,9 +164,82 @@ export function CommandBar({
     if (finder && streams.cam) void node.play().catch(() => undefined);
   }, [finder, streams.cam]);
 
+  const canSend = Boolean(value.trim() || files.length || streams.screen);
+  const imageCount = files.filter((item) => item.kind === 'image').length;
+  const seeing = replyTarget(settings, ollamaModels, endpoints, imageCount > 0);
+  const frameNote = files.length
+    ? imageCount
+      ? seeing.ok
+        ? `发送后画面会保存在这次对话里，并交给${seeing.cloud ? '云端' : '本机'}的 ${seeing.label}。`
+        : seeing.message
+      : '发送后文件会保存在这次对话里。'
+    : streams.screen
+      ? '屏幕保持共享。发送时会附上当前画面，并保存在这次对话里。'
+      : '';
+
+  const addAttachment = (next: ChatAttachment): boolean => {
+    const current = filesNow.current;
+    if (current.length >= MAX_ATTACHMENTS) {
+      if (next.previewUrl) URL.revokeObjectURL(next.previewUrl);
+      toast('一次最多 8 个附件。');
+      return false;
+    }
+    if (next.kind === 'image' && current.filter((item) => item.kind === 'image').length >= MAX_IMAGES) {
+      if (next.previewUrl) URL.revokeObjectURL(next.previewUrl);
+      toast('一次最多带 4 张画面。');
+      return false;
+    }
+    const items = [...current, next];
+    filesNow.current = items;
+    setFiles(items);
+    return true;
+  };
+
+  const snapCamera = async () => {
+    const node = video.current;
+    if (!node || !streams.cam) {
+      toast('先开启摄像头，再拍下这一帧。');
+      return;
+    }
+    try {
+      const blob = await frameFromStream(streams.cam);
+      if (addAttachment(imageAttachment('摄像头.jpg', blob))) toast('已拍下这一帧。发送后会保存在这次对话里。');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '这一帧没有拍下来', { icon: 'circle-alert' });
+    }
+  };
+
   const send = () => {
+    if (!canSend || busy) return;
     if (dictating) toggleDictation();
-    onSubmit(files);
+    const pending = files;
+    const screen = streams.screen;
+    void (async () => {
+      let extra: ChatAttachment | null = null;
+      if (screen) {
+        try {
+          const blob = await frameFromStream(screen);
+          const shot = imageAttachment('屏幕.jpg', blob);
+          if (pending.filter((item) => item.kind === 'image').length >= MAX_IMAGES) {
+            if (shot.previewUrl) URL.revokeObjectURL(shot.previewUrl);
+            toast('一次最多带 4 张画面。这一帧屏幕没有附上。');
+          } else {
+            extra = shot;
+          }
+        } catch (error) {
+          toast(error instanceof Error ? error.message : '这一帧屏幕没有附上', { icon: 'circle-alert' });
+          return;
+        }
+      }
+      const outgoing = extra ? [...pending, extra] : pending;
+      if (!value.trim() && outgoing.length === 0) return;
+      const accepted = await Promise.resolve(onSubmit(outgoing));
+      if (accepted === false) {
+        if (extra?.previewUrl) URL.revokeObjectURL(extra.previewUrl);
+        return;
+      }
+      setFiles([]);
+    })();
   };
 
   const choose = (value: string) => {
@@ -175,13 +254,35 @@ export function CommandBar({
       ref={box}
     >
       <div className="cmd-ctx" aria-label="已附加的上下文">
-        {files.map((name) => (
-          <span key={name} className="ctx-chip">
-            <span className="thumb">
-              <Icon name="file" className="i i-14" />
-            </span>
-            <span className="lbl">{name}</span>
-            <button type="button" aria-label={`移除 ${name}`} onClick={() => setFiles((items) => items.filter((item) => item !== name))}>
+        {files.map((item) => (
+          <span key={item.id} className="ctx-chip">
+            {item.previewUrl ? (
+              <button type="button" className="chip-open" aria-label={`预览 ${item.name}`} onClick={() => setPreview(item)}>
+                {item.kind === 'image' ? <img src={item.previewUrl} alt="" /> : (
+                  <span className="thumb">
+                    <Icon name="file" className="i i-14" />
+                  </span>
+                )}
+                <span className="lbl">{item.name}</span>
+              </button>
+            ) : (
+              <>
+                <span className="thumb">
+                  <Icon name="file" className="i i-14" />
+                </span>
+                <span className="lbl">{item.name}</span>
+              </>
+            )}
+            <button
+              type="button"
+              className="chip-x"
+              aria-label={`移除 ${item.name}`}
+              onClick={() => {
+                if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+                if (preview?.id === item.id) setPreview(null);
+                setFiles((items) => items.filter((entry) => entry.id !== item.id));
+              }}
+            >
               <Icon name="x" className="i i-14" />
             </button>
           </span>
@@ -202,7 +303,7 @@ export function CommandBar({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
-              if (value.trim() && !busy) send();
+              if (canSend && !busy) send();
             }
           }}
         />
@@ -214,19 +315,29 @@ export function CommandBar({
             type="file"
             hidden
             multiple
+            accept="image/jpeg,image/png,image/webp,image/gif,.pdf,.doc,.docx,.txt,.md,.json,.csv,.tsv,.log,.js,.jsx,.ts,.tsx,.py,.css,.html,.xml,.yml,.yaml,.toml,.sh"
             onChange={(event) => {
-              const names = [...(event.target.files ?? [])].map((file) => file.name);
-              setFiles((items) => [...new Set([...items, ...names])]);
+              const picked = [...(event.target.files ?? [])];
               event.target.value = '';
+              void (async () => {
+                for (const file of picked) {
+                  try {
+                    const next = await attachmentFromFile(file);
+                    if (!addAttachment(next) && next.previewUrl) URL.revokeObjectURL(next.previewUrl);
+                  } catch (error) {
+                    toast(error instanceof Error ? error.message : '这个文件没有附上', { icon: 'circle-alert' });
+                  }
+                }
+              })();
             }}
           />
         </label>
         <button
           type="button"
           className="icon-btn"
-          aria-label="截取屏幕或窗口"
+          aria-label={sensing.screen ? '停止共享屏幕' : '共享屏幕'}
           aria-pressed={sensing.screen}
-          data-tip="截取屏幕或窗口"
+          data-tip={sensing.screen ? '停止共享屏幕' : '共享屏幕'}
           onClick={() => void toggleSensor('screen')}
         >
           <Icon name="monitor" className="i i-18" />
@@ -239,7 +350,12 @@ export function CommandBar({
           aria-pressed={sensing.cam}
           data-tip="摄像头画面"
           onClick={() => {
-            setFinder((openNow) => !openNow);
+            if (finder) {
+              if (sensing.cam) void toggleSensor('cam');
+              setFinder(false);
+              return;
+            }
+            setFinder(true);
             if (!sensing.cam) void toggleSensor('cam');
           }}
         >
@@ -270,7 +386,7 @@ export function CommandBar({
           type="button"
           className="send-btn"
           aria-label={busy ? '停止生成' : '发送'}
-          disabled={!busy && !value.trim()}
+          disabled={!busy && !canSend}
           onClick={() => (busy ? onStop?.() : send())}
         >
           <Icon name={busy ? 'square' : 'arrow-up'} className="i i-18" />
@@ -338,18 +454,25 @@ export function CommandBar({
           </span>
         </div>
         <div className="vf-bar">
-          <button type="button" className="btn btn-sm btn-secondary" onClick={() => void toggleSensor('cam')}>
-            {sensing.cam ? '关闭' : '开启'}
-          </button>
           <button
             type="button"
             className="btn btn-sm btn-secondary"
-            onClick={() => setFinder(false)}
+            onClick={() => {
+              if (sensing.cam) void toggleSensor('cam');
+              setFinder(false);
+            }}
           >
-            收起
+            关闭
+          </button>
+          <button type="button" className="btn btn-sm btn-secondary" disabled={!sensing.cam} onClick={() => void snapCamera()}>
+            拍下这一帧
           </button>
         </div>
       </div>
+      {frameNote ? <p className="cmd-note">{frameNote}</p> : null}
+      {preview?.previewUrl ? (
+        <AttachmentPreview src={preview.previewUrl} name={preview.name} kind={previewKind(preview)} text={preview.text} onClose={() => setPreview(null)} />
+      ) : null}
     </div>
   );
 }

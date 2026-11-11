@@ -18,7 +18,15 @@ export class OllamaAdapter implements ModelProvider {
       response = await this.fetchImpl(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/x-ndjson' },
-        body: JSON.stringify({ model: request.model, messages: request.messages, stream: true }),
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+            ...(message.images?.length ? { images: message.images.map((image) => image.base64) } : {}),
+          })),
+          stream: true,
+        }),
         signal,
       });
     } catch (error) {

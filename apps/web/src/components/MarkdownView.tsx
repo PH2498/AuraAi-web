@@ -27,6 +27,31 @@ export function Markdown({ text }: { text: string }) {
   return parseMarkdown(text).map((block, index) => {
     if (block.type === 'code') return <CodeBlock key={index} lang={block.lang} text={block.text} />;
     if (block.type === 'h') return <h3 key={index}>{inline(block.text)}</h3>;
+    if (block.type === 'quote') return <blockquote key={index}>{inline(block.text)}</blockquote>;
+    if (block.type === 'table') {
+      return (
+        <div className="table-wrap" key={index}>
+          <table>
+            <thead>
+              <tr>
+                {block.header.map((cell, cellIndex) => (
+                  <th key={cellIndex} className={cellClass(cell, block.align[cellIndex])}>{inline(cell)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {block.header.map((_, cellIndex) => (
+                    <td key={cellIndex} className={cellClass(row[cellIndex] ?? '', block.align[cellIndex])}>{inline(row[cellIndex] ?? '')}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
     if (block.type === 'ul' || block.type === 'ol') {
       const List = block.type;
       return (
@@ -70,6 +95,12 @@ function CodeBlock({ lang, text }: { lang: string; text: string }) {
       </pre>
     </div>
   );
+}
+
+function cellClass(text: string, align: 'left' | 'center' | 'right' | undefined): string {
+  if (align === 'right' || align === 'center') return align === 'right' ? 'n' : 'c';
+  if (/[¥￥$€£]\s*[\d,]/.test(text) || /^[\d,]+(?:\.\d+)?$/.test(text.trim())) return 'n';
+  return '';
 }
 
 function inline(text: string) {

@@ -3,14 +3,17 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useSession } from '../app/session';
 import { useCore, useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
+import { savedShot, ShotList } from '../components/shot-list';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { CONVERSATIONS } from '../fixtures/content';
-import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type ServerConversation, type ServerMessage } from '../chat/api';
+import { deleteConversation, ensureOllama, listConversations, listMessages, renameConversation, streamReply, type MessageAttachment, type ServerConversation, type ServerMessage } from '../chat/api';
+import type { ChatAttachment } from '../chat/attachments';
+import { prepareSend } from '../chat/prepare';
 import { createMemory } from '../memory/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
-import { describeChoice, resolveChat } from '../state/models';
+import { describeChoice } from '../state/models';
 
 const FRESH_SUGGESTIONS: [string, string][] = [
   ['monitor', '总结我屏幕上的内容'],
@@ -47,17 +50,17 @@ function savedModel(thread: Thread): { where: '本机' | '云端'; name: string 
   return null;
 }
 
-function threadTurns(history: ServerMessage[]): { key: string; ask: string; answer: string; streaming: boolean }[] {
-  const turns: { key: string; ask: string; answer: string; streaming: boolean }[] = [];
+function threadTurns(history: ServerMessage[]): { key: string; ask: string; answer: string; streaming: boolean; shots: MessageAttachment[] }[] {
+  const turns: { key: string; ask: string; answer: string; streaming: boolean; shots: MessageAttachment[] }[] = [];
   for (const item of history) {
     if (item.role === 'user') {
-      turns.push({ key: item.id, ask: item.content.text, answer: '', streaming: false });
+      turns.push({ key: item.id, ask: item.content.display || item.content.text, answer: '', streaming: false, shots: (item.content.attachments ?? []).map(savedShot) });
       continue;
     }
     if (item.role !== 'assistant') continue;
     const last = turns.at(-1);
     if (!last || last.answer) {
-      turns.push({ key: item.id, ask: '', answer: item.content.text, streaming: item.status === 'streaming' });
+      turns.push({ key: item.id, ask: '', answer: item.content.text, streaming: item.status === 'streaming', shots: [] });
       continue;
     }
     last.answer = item.content.text;
@@ -207,24 +210,28 @@ export function ConversationsPage() {
       .catch(() => undefined);
   };
 
-  const submit = (text: string, speakAfter = false) => {
-    const ask = text.trim();
-    if (!ask || busy) return;
+  const submit = (text: string, speakAfter = false, attachments: ChatAttachment[] = []): Promise<boolean> => {
+    const typed = text.trim();
+    if (busy) return Promise.resolve(false);
     if (!fresh && !live) {
+      if (!typed && attachments.length === 0) return Promise.resolve(false);
       setDraft('');
       setNote('这是演示回复。模型还没有接入，这条内容没有发给任何服务。');
-      return;
+      return Promise.resolve(true);
     }
-    void (async () => {
-      if (!(await requireAccount())) {
-        setDraft(ask);
-        return;
+    return (async () => {
+      if (!(await requireAccount())) return false;
+      const prepared = await prepareSend(typed, attachments, settings, ollamaModels, endpoints).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : '这一帧没有附上';
+        toast(message, { icon: 'circle-alert' });
+        return { ok: false as const, message: undefined };
+      });
+      if (!prepared.ok) {
+        if (prepared.message) setNote(prepared.message);
+        return false;
       }
-      const target = resolveChat(settings, ollamaModels, endpoints);
-      if (!target.ok) {
-        setNote(target.message);
-        return;
-      }
+      const { send } = prepared;
+      const target = send.target;
       const cloud = target.cloud;
       const model = target.model;
       setDraft('');
@@ -236,7 +243,7 @@ export function ConversationsPage() {
       const userMessage: ServerMessage = {
         id: `pending-${Date.now()}`,
         role: 'user',
-        content: { text: ask },
+        content: { text: send.message, display: send.display, attachments: send.shots },
         sequence: history.length + 1,
         status: 'complete',
       };
@@ -258,7 +265,16 @@ export function ConversationsPage() {
         if (!cloud) await ensureOllama(settings.ollamaUrl, model);
         core.setTicks(2, 1);
         await streamReply(
-          { message: ask, conversationId: live ? selectedId : undefined, provider: target.provider, providerId: target.providerId, model },
+          {
+            message: send.message,
+            display: send.display,
+            conversationId: live ? selectedId : undefined,
+            provider: target.provider,
+            providerId: target.providerId,
+            model,
+            images: send.images,
+            attachments: send.attachments,
+          },
           {
             signal: controller.signal,
             onStart: (event) => {
@@ -285,8 +301,8 @@ export function ConversationsPage() {
             .then(() => setAura('idle'))
             .catch(() => setAura('idle'));
         }
-        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(ask)) {
-          void createMemory({ content: ask.slice(0, 240), category: 'learned', sourceType: 'conversation', title: ask.slice(0, 40) }).then(
+        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(typed)) {
+          void createMemory({ content: typed.slice(0, 240), category: 'learned', sourceType: 'conversation', title: typed.slice(0, 40) }).then(
             () => toast('已放进待确认。确认前不会用于对话。'),
             () => undefined,
           );
@@ -311,6 +327,7 @@ export function ConversationsPage() {
         core.setAmplitude(0);
         core.setTicks(0, 0);
       }
+      return true;
     })();
   };
 
@@ -616,11 +633,12 @@ export function ConversationsPage() {
             </div>
             <div className="stream">
               <div className="col">
-                {(live ? threadTurns(history) : [{ key: current.id, ask: current.ask, answer: current.answer.join('\n\n'), streaming: false }]).map((turn, index, turns) => (
+                {(live ? threadTurns(history) : [{ key: current.id, ask: current.ask, answer: current.answer.join('\n\n'), streaming: false, shots: [] as MessageAttachment[] }]).map((turn, index, turns) => (
                   <article className="ex chat-turn" key={turn.key}>
-                    {turn.ask ? (
+                    {turn.ask || turn.shots.length ? (
                       <div className="chat-user">
-                        <p className="chat-bubble">{turn.ask}</p>
+                        {turn.shots.length ? <ShotList shots={turn.shots} /> : null}
+                        {turn.ask ? <p className="chat-bubble">{turn.ask}</p> : null}
                       </div>
                     ) : null}
                     <div className="chat-ai">
@@ -697,7 +715,7 @@ export function ConversationsPage() {
             onChange={setDraft}
             busy={busy}
             onStop={() => stopRef.current?.abort()}
-            onSubmit={() => submit(draft, settings.autoRead)}
+            onSubmit={(items) => submit(draft, settings.autoRead, items)}
           />
         </div>
       </section>
@@ -709,12 +727,21 @@ export function ConversationsPage() {
           </button>
         </div>
         {fresh ? (
-          <p className="none">新对话开始后，这里会列出用到的画面、附件、工具和记忆。这些还没有接入，所以现在是空的。</p>
+          <p className="none">新对话开始后，这里会列出用到的画面、附件和记忆。</p>
         ) : (
           <>
             <section>
               <h3>画面与附件</h3>
-              <p className="none">没有用到画面或附件</p>
+              {live && history.some((item) => item.content.attachments?.length) ? (
+                history.flatMap((item) => item.content.attachments ?? []).map((item, index) => (
+                  <div className="line" key={`${item.name}-${index}`}>
+                    <Icon name={item.type === 'image' ? 'scan-eye' : 'file'} />
+                    <span>{item.name} · 保存在这次对话里</span>
+                  </div>
+                ))
+              ) : (
+                <p className="none">{live ? '没有用到画面或附件' : '演示会话没有画面或附件'}</p>
+              )}
             </section>
             <section>
               <h3>工具</h3>
@@ -739,7 +766,7 @@ export function ConversationsPage() {
                 <Icon name="shield-check" className="i i-14" />
                 <span>
                   {live
-                    ? `这次对话发给${model ? `${model.where}的 ${model.name}` : `${describeChoice(settings.chatModel, endpoints).where === '本地' ? '本机' : describeChoice(settings.chatModel, endpoints).where}的 ${describeChoice(settings.chatModel, endpoints).name}`}，并保存在你的账号里。没有调用工具，${usedMemory.length ? `读了 ${usedMemory.length} 条已确认的记忆` : '没有读取记忆'}。`
+                    ? `这次对话发给${model ? `${model.where}的 ${model.name}` : `${describeChoice(settings.chatModel, endpoints).where === '本地' ? '本机' : describeChoice(settings.chatModel, endpoints).where}的 ${describeChoice(settings.chatModel, endpoints).name}`}，并保存在你的账号里。${history.some((item) => item.content.attachments?.some((shot) => shot.type === 'image')) ? '画面只发给能看图的模型，原图也留在这次对话里。' : ''}没有调用工具，${usedMemory.length ? `读了 ${usedMemory.length} 条已确认的记忆` : '没有读取记忆'}。`
                     : '这次是演示会话，内容没有发给模型。'}
                 </span>
               </p>

@@ -1,6 +1,6 @@
 import type { WebSettings } from './settings';
 
-const VISION_HINTS = ['llava', 'moondream', 'minicpm-v', 'bakllava', 'qwen2.5vl', 'qwen2-vl', 'qwen3-vl', 'llama3.2-vision', 'internvl', 'granite3.2-vision'];
+const VISION_HINTS = ['llava', 'moondream', 'minicpm-v', 'bakllava', 'qwen2.5vl', 'qwen2-vl', 'qwen3-vl', 'llama3.2-vision', 'internvl', 'granite3.2-vision', 'gpt-4o', 'gpt-4.1', 'gemini', 'claude-3', 'claude-4', 'pixtral', 'deepseek-flash', 'deepseek-v4-flash'];
 
 export type CloudEndpoint = {
   id: string;
@@ -127,4 +127,16 @@ export function resolveVision(settings: WebSettings, names: string[], endpoints:
     return { ok: false, message: '这个本机模型不能看图，或当前没有安装。画面不会发给文字模型。' };
   }
   return { ok: true, cloud: false, provider: 'ollama', model: parsed.name, label: parsed.name };
+}
+
+export function replyTarget(settings: WebSettings, names: string[], endpoints: CloudEndpoint[], hasImages: boolean): ChatTarget {
+  const chat = resolveChat(settings, names, endpoints);
+  if (!hasImages) return chat;
+  if (chat.ok && isVisionModelName(chat.model)) return chat;
+  const vision = resolveVision(settings, names, endpoints);
+  if (!vision.ok) return vision;
+  if (!isVisionModelName(vision.model)) {
+    return { ok: false, message: '选中的模型不能看图。画面不会发给文字模型，也没有保存。' };
+  }
+  return vision;
 }

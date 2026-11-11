@@ -3,18 +3,21 @@ import { Link } from 'react-router-dom';
 import { useSession } from '../app/session';
 import { useCore, useCorePointer, useCoreSlot } from '../components/aura-core/CoreProvider';
 import { CommandBar } from '../components/command-input/CommandBar';
+import { ShotList, type Shot } from '../components/shot-list';
 import { Markdown } from '../components/MarkdownView';
 import { Icon } from '../components/icon';
 import { ensureOllama, listConversations, streamReply, type ServerConversation } from '../chat/api';
+import type { ChatAttachment } from '../chat/attachments';
+import { prepareSend } from '../chat/prepare';
 import { createMemory } from '../memory/api';
 import { fetchSpeech } from '../vision/api';
 import { playWav, stopSpeech, unlockSpeech } from '../vision/playback';
 import { CONVERSATIONS, SUGGESTIONS } from '../fixtures/content';
-import { connectionLabel, describeChoice, localChatReady, resolveChat, type CloudEndpoint } from '../state/models';
+import { connectionLabel, describeChoice, localChatReady, type CloudEndpoint } from '../state/models';
 import { STATE_LABEL, type WebSettings } from '../state/settings';
 
 type Stage = { id: string; label: string; status: 'pending' | 'active' | 'done' | 'fail' };
-type HomeTurn = { key: string; ask: string; answer: string; at: string; settled: boolean; stages: Stage[] };
+type HomeTurn = { key: string; ask: string; answer: string; at: string; settled: boolean; stages: Stage[]; shots?: Shot[]; seenWith?: string };
 type HomeSession = { when: string; turns: HomeTurn[] };
 
 const THINKING: Stage[] = [
@@ -99,10 +102,9 @@ export function HomePage() {
     });
   };
 
-  const submit = (text: string, speakAfter = false) => {
-    const ask = text.trim();
-    if (!ask || busy) return;
-    setDraft('');
+  const submit = (text: string, speakAfter = false, attachments: ChatAttachment[] = []): Promise<boolean> => {
+    if (busy) return Promise.resolve(false);
+    const typed = text.trim();
     const now = new Date();
     const stamp = {
       at: now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
@@ -116,22 +118,28 @@ export function HomePage() {
         when: current?.when ?? stamp.when,
         turns: [
           ...(current?.turns ?? []),
-          { key: `local-${Date.now()}`, ask, answer, at: stamp.at, settled: true, stages: THINKING.map((item) => ({ ...item, status: 'fail' as const })) },
+          { key: `local-${Date.now()}`, ask: typed || '看看这张图。', answer, at: stamp.at, settled: true, stages: THINKING.map((item) => ({ ...item, status: 'fail' as const })) },
         ],
       }));
       setNotice(null);
       setAura(state);
     };
-    void (async () => {
-      if (!(await requireAccount())) {
-        setDraft(ask);
-        return;
+    return (async () => {
+      if (!(await requireAccount())) return false;
+      const prepared = await prepareSend(typed, attachments, settings, ollamaModels, endpoints).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : '这一帧没有附上';
+        toast(message, { icon: 'circle-alert' });
+        return { ok: false as const, message: undefined };
+      });
+      if (!prepared.ok) {
+        if (prepared.message && prepared.message !== '这一帧没有发出去。') show(prepared.message);
+        else if (prepared.message) toast(prepared.message);
+        return false;
       }
-      const target = resolveChat(settings, ollamaModels, endpoints);
-      if (!target.ok) {
-        show(target.message);
-        return;
-      }
+      const { send } = prepared;
+      const ask = send.display;
+      const target = send.target;
+      setDraft('');
       const cloud = target.cloud;
       const model = target.model;
       const opening = conversationId.current == null;
@@ -150,7 +158,7 @@ export function HomePage() {
       }
       setSession((current) => ({
         when: current?.when ?? stamp.when,
-        turns: [...(current?.turns ?? []), { key: turnKey, ask, answer: '', at: stamp.at, settled: false, stages: THINKING.map((item) => ({ ...item })) }],
+        turns: [...(current?.turns ?? []), { key: turnKey, ask, answer: '', at: stamp.at, settled: false, stages: THINKING.map((item) => ({ ...item })), shots: send.shots, seenWith: send.seenWith }],
       }));
       let answer = '';
       let frame = 0;
@@ -184,7 +192,7 @@ export function HomePage() {
       };
       try {
         await Promise.all([cloud ? Promise.resolve() : ensureOllama(settings.ollamaUrl, model), opening ? wait(700) : Promise.resolve()]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return false;
         if (opening) {
           setStages([
             { id: 'intent', label: '理解意图', status: 'done' },
@@ -193,7 +201,16 @@ export function HomePage() {
           core.setTicks(2, 1);
         }
         await streamReply(
-          { message: ask, conversationId: conversationId.current ?? undefined, provider: target.provider, providerId: target.providerId, model },
+          {
+            message: send.message,
+            display: send.display,
+            conversationId: conversationId.current ?? undefined,
+            provider: target.provider,
+            providerId: target.providerId,
+            model,
+            images: send.images,
+            attachments: send.attachments,
+          },
           {
             signal: controller.signal,
             onStart: (event) => {
@@ -221,8 +238,8 @@ export function HomePage() {
             .then(() => setAura('idle'))
             .catch(() => setAura('idle'));
         }
-        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(ask)) {
-          void createMemory({ content: ask.slice(0, 240), category: 'learned', sourceType: 'conversation', title: ask.slice(0, 40) }).then(
+        if (settings.memoryAuto && /记住|以后|我喜欢|我习惯/.test(typed)) {
+          void createMemory({ content: typed.slice(0, 240), category: 'learned', sourceType: 'conversation', title: typed.slice(0, 40) }).then(
             () => toast('已放进待确认。确认前不会用于对话。'),
             () => undefined,
           );
@@ -242,7 +259,7 @@ export function HomePage() {
             setNotice(null);
           }
           setAura('idle');
-          return;
+          return started ? true : false;
         }
         if (target.providerId) noteCloudProbe(target.providerId, 'fail');
         if (started) {
@@ -258,7 +275,9 @@ export function HomePage() {
           setStages((items) => items.map((item) => (item.status === 'active' ? { ...item, status: 'fail' } : item)));
           setNotice({ text: message, error: true });
           setAura('error');
+          return false;
         }
+        return true;
       } finally {
         stopRef.current = null;
         setBusy(false);
@@ -266,6 +285,7 @@ export function HomePage() {
         core.setTicks(0, 0);
         if (started) setStages([]);
       }
+      return true;
     })();
   };
 
@@ -307,10 +327,17 @@ export function HomePage() {
                 <span> · 说完停一下，我会接着处理。</span>
               </>
             ) : aura === 'vision' ? (
-              <>
-                <b>画面已打开</b>
-                <span> · 要分析的话，到视觉页点「分析这一帧」。</span>
-              </>
+              sensing.screen ? (
+                <>
+                  <b>屏幕共享中</b>
+                  <span> · 发送时会带上当前画面。</span>
+                </>
+              ) : (
+                <>
+                  <b>画面已打开</b>
+                  <span> · 拍下后再发送，才会交给能看图的模型。</span>
+                </>
+              )
             ) : stages.find((item) => item.status === 'active') ? (
               <b>{stages.find((item) => item.status === 'active')?.label}</b>
             ) : (
@@ -345,6 +372,7 @@ export function HomePage() {
             {session.turns.map((turn) => (
               <article className="turn chat-turn" key={turn.key}>
                 <div className="chat-user">
+                  {turn.shots?.length ? <ShotList shots={turn.shots} /> : null}
                   <p className="chat-bubble">{turn.ask}</p>
                 </div>
                 <div className="chat-ai">
@@ -354,7 +382,7 @@ export function HomePage() {
                   <details className="activity" open={!turn.settled}>
                     <summary>
                       <Icon name={turn.settled ? 'circle-check' : 'loader-circle'} className="i i-14" />
-                      <span className="sum">{turn.settled ? (describeChoice(settings.chatModel, endpoints).icon === 'cloud' ? '云端模型回复' : '本机模型回复') : '正在生成'}</span>
+                      <span className="sum">{turn.seenWith ? `画面由${turn.seenWith}看过` : turn.settled ? (describeChoice(settings.chatModel, endpoints).icon === 'cloud' ? '云端模型回复' : '本机模型回复') : '正在生成'}</span>
                       <Icon name="chevron-right" className="i i-14 chev" />
                     </summary>
                     <ol>
@@ -426,7 +454,7 @@ export function HomePage() {
             onChange={setDraft}
             busy={busy}
             onStop={stop}
-            onSubmit={() => submit(draft, settings.autoRead)}
+            onSubmit={(items) => submit(draft, settings.autoRead, items)}
           />
         </div>
         <div className="dock-foot">

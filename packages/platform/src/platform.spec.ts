@@ -25,6 +25,38 @@ describe('createWebPlatform', () => {
     });
   });
 
+  it('keeps the current page focused when a screen is chosen', async () => {
+    const order: string[] = [];
+    const setFocusBehavior = vi.fn(() => {
+      order.push('focus');
+    });
+    class CaptureController {
+      setFocusBehavior = setFocusBehavior;
+    }
+    const getDisplayMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          order.push('request');
+          queueMicrotask(() => {
+            order.push('resolve');
+            resolve({ getTracks: () => [] } as unknown as MediaStream);
+          });
+        }),
+    );
+    const platform = createWebPlatform(
+      host({
+        navigator: { mediaDevices: { getDisplayMedia } },
+        CaptureController,
+      }),
+    );
+
+    await platform.requestScreenCapture();
+
+    expect(order).toEqual(['request', 'focus', 'resolve']);
+    expect(getDisplayMedia.mock.calls[0]?.[0]?.controller).toBeInstanceOf(CaptureController);
+    expect(setFocusBehavior).toHaveBeenCalledWith('no-focus-change');
+  });
+
   it('maps a denied screen share to a permission error', async () => {
     const platform = createWebPlatform(
       host({

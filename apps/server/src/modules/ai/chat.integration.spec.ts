@@ -7,8 +7,10 @@ import { DatabaseService } from '../../database/database.service';
 import { messages, users } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
 import { AuthService } from '../auth/auth.service';
+import { ConversationsService } from '../conversations/conversations.service';
 import { ProvidersService } from '../providers/providers.service';
 import { AiService } from './ai.service';
+import { holdAttachment } from './frames';
 
 loadEnvFile();
 const parsed = parseEnv(process.env);
@@ -81,4 +83,37 @@ describe('phase 4 ollama chat', () => {
       HttpException,
     );
   }, 100_000);
+
+  it('saves a document with the conversation and only the owner can read it', async () => {
+    if (!auth || !providers || !ai || !database || !audit) throw new Error('服务未就绪');
+    const owner = await auth.createUser(`files-${Date.now()}@phase4.test`, 'password-one');
+    const other = await auth.createUser(`files-other-${Date.now()}@phase4.test`, 'password-one');
+    created.push(owner.id, other.id);
+    await providers.create(owner.id, {
+      provider: 'ollama',
+      displayName: 'Ollama',
+      baseUrl: 'http://127.0.0.1:11434',
+      defaultModel: 'qwen2.5:7b',
+    });
+    const note = holdAttachment(owner.id, Buffer.from('记得买牛奶'), 'text/plain; charset=utf-8', '笔记.txt', 'file');
+    expect(note.ok).toBe(true);
+    if (!note.ok) return;
+    const prepared = await ai.prepare(owner.id, {
+      provider: 'ollama',
+      model: 'qwen2.5:7b',
+      message: '看看这份笔记',
+      display: '看看这份笔记',
+      attachments: [{ id: note.id }],
+    });
+    const stored = await database.db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(eq(messages.id, prepared.userMessageId));
+    expect(stored[0]?.content.attachments?.[0]).toMatchObject({ id: note.id, name: '笔记.txt', type: 'file' });
+    expect(stored[0]?.content.text).toContain('记得买牛奶');
+    expect((await ai.openAttachment(owner.id, note.id))?.bytes.toString()).toContain('记得买牛奶');
+    expect(await ai.openAttachment(other.id, note.id)).toBeNull();
+    await new ConversationsService(database, audit).remove(owner.id, prepared.conversationId);
+    expect(await ai.openAttachment(owner.id, note.id)).toBeNull();
+  });
 });

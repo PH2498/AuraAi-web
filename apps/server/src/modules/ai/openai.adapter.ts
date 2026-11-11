@@ -27,7 +27,25 @@ export class OpenAiAdapter implements ModelProvider {
           accept: 'text/event-stream',
           authorization: `Bearer ${this.apiKey}`,
         },
-        body: JSON.stringify({ model: request.model, messages: request.messages, stream: true, stream_options: { include_usage: true } }),
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages.map((message) =>
+            message.images?.length
+              ? {
+                  role: message.role,
+                  content: [
+                    { type: 'text', text: message.content },
+                    ...message.images.map((image) => ({
+                      type: 'image_url',
+                      image_url: { url: `data:${image.mime};base64,${image.base64}` },
+                    })),
+                  ],
+                }
+              : { role: message.role, content: message.content },
+          ),
+          stream: true,
+          stream_options: { include_usage: true },
+        }),
         signal,
       });
     } catch (error) {

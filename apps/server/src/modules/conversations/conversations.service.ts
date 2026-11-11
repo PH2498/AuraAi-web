@@ -7,6 +7,7 @@ import { DatabaseService } from '../../database/database.service';
 import { conversations, messages } from '../../database/schema';
 import { AuditService } from '../audit/audit.service';
 import { activeMemoryRecords } from '../memory/memory.service';
+import { deleteAttachmentFiles } from '../ai/attachment-files';
 import { citedMemories } from '../memory/memory.policy';
 
 const CreateSchema = z.object({
@@ -100,9 +101,15 @@ export class ConversationsService {
 
   async remove(userId: string, id: string) {
     await this.owned(userId, id);
+    const rows = await this.database.db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(eq(messages.conversationId, id));
+    const attachmentIds = rows.flatMap((row) => (row.content.attachments ?? []).flatMap((item) => (item.id ? [item.id] : [])));
     await this.database.db
       .delete(conversations)
       .where(and(eq(conversations.id, id), eq(conversations.userId, userId)));
+    await deleteAttachmentFiles(userId, attachmentIds);
     await this.audit.record({
       userId,
       action: 'conversation.delete',

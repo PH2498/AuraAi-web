@@ -8,10 +8,12 @@ export type ServerConversation = {
   updatedAt: string;
 };
 
+export type MessageAttachment = { id?: string; name: string; type: 'image' | 'file'; mime?: string; previewUrl?: string };
+
 export type ServerMessage = {
   id: string;
   role: string;
-  content: { text: string; memories?: { id: string; content: string }[] };
+  content: { text: string; display?: string; attachments?: MessageAttachment[]; memories?: { id: string; content: string }[] };
   sequence: number;
   status: string;
 };
@@ -173,8 +175,27 @@ export async function listMessages(conversationId: string): Promise<ServerMessag
   return response.json() as Promise<ServerMessage[]>;
 }
 
+export async function uploadAttachment(blob: Blob, name: string): Promise<{ id: string; name: string; type: 'image' | 'file'; mime: string }> {
+  const body = new FormData();
+  body.set('file', blob, name || '附件');
+  body.set('name', name);
+  const response = await fetch('/api/v1/chat/attachments', { method: 'POST', credentials: 'include', body });
+  const payload = (await response.json().catch(() => null)) as { id?: string; name?: string; type?: 'image' | 'file'; mime?: string; message?: string } | null;
+  if (!response.ok || !payload?.id || !payload.type || !payload.mime) throw new Error(payload?.message || '这个附件没有附上');
+  return { id: payload.id, name: payload.name || name, type: payload.type, mime: payload.mime };
+}
+
 export async function streamReply(
-  input: { message: string; conversationId?: string; provider: 'ollama' | 'openai'; providerId?: string; model: string },
+  input: {
+    message: string;
+    display?: string;
+    conversationId?: string;
+    provider: 'ollama' | 'openai';
+    providerId?: string;
+    model: string;
+    images?: { id: string }[];
+    attachments?: { id: string }[];
+  },
   handlers: {
     signal: AbortSignal;
     onStart: (event: Extract<ChatStream, { type: 'message_start' }>) => void;
