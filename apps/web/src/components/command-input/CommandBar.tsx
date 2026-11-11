@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
 import { cloudItemStatus, cloudRef, describeChoice, localRef, parseModelRef } from '../../state/models';
 import { appendSpeech, startBrowserRecognition } from '../../voice/recognition';
-import { transcribeClip } from '../../voice/transcribe';
+import { transcribeClip, warmVoice } from '../../voice/transcribe';
 import { Icon } from '../icon';
 
 export function CommandBar({
@@ -59,7 +59,7 @@ export function CommandBar({
       const blob = (event as CustomEvent<Blob>).detail;
       if (!(blob instanceof Blob)) return;
       chain = chain.then(async () => {
-        await new Promise((resolve) => window.setTimeout(resolve, browserAt ? 900 : 0));
+        await new Promise((resolve) => window.setTimeout(resolve, browserAt ? 200 : 0));
         if (browserAt && Date.now() - browserAt < 1600) return;
         try {
           const text = await transcribeClip(blob);
@@ -72,6 +72,7 @@ export function CommandBar({
         }
       });
     };
+    warmVoice();
     window.addEventListener('aura-utterance', onUtterance);
     beginMeter.current();
     handle = startBrowserRecognition({

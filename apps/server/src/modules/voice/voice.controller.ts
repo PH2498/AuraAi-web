@@ -3,7 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { fail } from '../../common/http';
 import { synthesizeSpeech } from '../vision/speech';
-import { transcribeBuffer, whisperPython } from './transcribe';
+import { transcribeBuffer, warmTranscriber, whisperPython } from './transcribe';
 import { MAX_AUDIO_BYTES, audioKind, wavDurationMs } from './voice.policy';
 
 @ApiTags('voice')
@@ -21,6 +21,18 @@ export class VoiceController {
       return new StreamableFile(wav, { type: 'audio/wav' });
     } catch {
       fail(503, 'SPEECH_FAILED', '这一句没有读出来。');
+    }
+  }
+
+  @Post('ready')
+  @ApiOperation({ summary: '提前加载本机语音模型，缩短第一句的等待。' })
+  async ready() {
+    if (!(await whisperPython())) return { ready: false };
+    try {
+      await warmTranscriber();
+      return { ready: true };
+    } catch {
+      return { ready: false };
     }
   }
 

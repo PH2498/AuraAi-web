@@ -8,6 +8,8 @@ const WORKER = `
 import sys
 protocol = sys.stdout
 sys.stdout = sys.stderr
+import torch
+torch.set_num_threads(4)
 import whisper
 model = whisper.load_model("base", device="cpu")
 protocol.write("READY\\n")
@@ -17,7 +19,18 @@ for line in sys.stdin:
     if not path:
         continue
     try:
-        result = model.transcribe(path, language="zh", fp16=False, verbose=None, initial_prompt="以下是普通话的句子。")
+        result = model.transcribe(
+            path,
+            language="zh",
+            fp16=False,
+            verbose=None,
+            temperature=0.0,
+            beam_size=1,
+            best_of=1,
+            condition_on_previous_text=False,
+            without_timestamps=True,
+            initial_prompt="以下是普通话的句子。",
+        )
         text = " ".join((result.get("text") or "").split())
     except Exception:
         text = ""
@@ -137,6 +150,10 @@ async function engine(): Promise<Worker> {
     throw error;
   }
   return next;
+}
+
+export function warmTranscriber(): Promise<void> {
+  return engine().then(() => undefined);
 }
 
 let tail: Promise<unknown> = Promise.resolve();

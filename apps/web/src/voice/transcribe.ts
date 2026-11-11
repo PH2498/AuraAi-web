@@ -1,3 +1,7 @@
+export function warmVoice(): void {
+  void fetch('/api/v1/voice/ready', { method: 'POST', credentials: 'include' }).catch(() => undefined);
+}
+
 export async function transcribeClip(blob: Blob): Promise<string> {
   const body = new FormData();
   const type = blob.type || 'audio/webm';

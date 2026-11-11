@@ -16,6 +16,7 @@ import { currentAccount, listProviders, loginAccount, logoutAccount, refreshOlla
 import { isVisionModelName, localRef, type CloudEndpoint, type CloudProbe } from '../state/models';
 import { loadSettings, saveSettings, type AuraState, type WebSettings } from '../state/settings';
 import { listMemories } from '../memory/api';
+import { encodeWav } from '../voice/wav';
 import { listTasks } from '../tasks/api';
 
 const platform = createWebPlatform();
@@ -226,54 +227,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const analyser = context.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0;
-      context.createMediaStreamSource(stream).connect(analyser);
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      const mute = context.createGain();
+      mute.gain.value = 0;
+      const processor = context.createScriptProcessor(4096, 1, 1);
+      const samples: Float32Array[] = [];
+      processor.onaudioprocess = (event) => {
+        samples.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(mute);
+      mute.connect(context.destination);
       const data = new Float32Array(analyser.fftSize);
       let last = performance.now();
       let envelope = 0;
       let speakingFor = 0;
       let quietFor = 0;
       let voiced = false;
-      let recorder: MediaRecorder | null = null;
-      const parts: Blob[] = [];
-      const openRecorder = () => {
-        if (typeof MediaRecorder === 'undefined' || recorder?.state === 'recording') return;
-        parts.length = 0;
-        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
-        recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-        recorder.addEventListener('dataavailable', (event) => {
-          if (event.data.size) parts.push(event.data);
-        });
-        recorder.start();
+      const finishUtterance = () => {
+        if (!samples.length) return;
+        const taken = samples.splice(0);
+        const blob = encodeWav(taken, context.sampleRate);
+        if (blob.size > 8_000) window.dispatchEvent(new CustomEvent('aura-utterance', { detail: blob }));
       };
-      const finishUtterance = (): boolean => {
-        const current = recorder;
-        recorder = null;
-        if (!current || current.state !== 'recording') return false;
-        const clips = parts.splice(0);
-        current.addEventListener(
-          'dataavailable',
-          (event) => {
-            if (event.data.size) clips.push(event.data);
-          },
-          { once: true },
-        );
-        current.addEventListener(
-          'stop',
-          () => {
-            const blob = new Blob(clips, { type: current.mimeType || 'audio/webm' });
-            if (blob.size > 800) window.dispatchEvent(new CustomEvent('aura-utterance', { detail: blob }));
-            if (dictatingRef.current) openRecorder();
-            else stopAudio();
-          },
-          { once: true },
-        );
-        current.stop();
-        return true;
-      };
-      openRecorder();
       const pump = (now: number) => {
         if (!dictatingRef.current) {
-          if (!(voiced && finishUtterance())) stopAudio();
+          if (voiced) finishUtterance();
+          processor.disconnect();
+          mute.disconnect();
+          stopAudio();
           return;
         }
         analyser.getFloatTimeDomainData(data);
@@ -292,7 +275,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           if (speakingFor > 0.28) voiced = true;
         } else if (voiced) {
           quietFor += dt;
-          if (quietFor > 0.7) {
+          if (quietFor > 0.38) {
             voiced = false;
             speakingFor = 0;
             quietFor = 0;
@@ -300,6 +283,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           }
         } else {
           speakingFor = 0;
+          let count = 0;
+          for (const chunk of samples) count += chunk.length;
+          const keep = context.sampleRate * 0.35;
+          while (count > keep && samples.length > 1) count -= samples.shift()?.length ?? 0;
         }
         const frame = requestAnimationFrame(pump);
         if (audioRef.current) audioRef.current.frame = frame;
