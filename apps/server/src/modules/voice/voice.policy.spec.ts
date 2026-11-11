@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { usableTranscript } from './transcribe';
 import { audioKind, wavDurationMs } from './voice.policy';
 
 describe('voice audio policy', () => {
@@ -21,5 +22,10 @@ describe('voice audio policy', () => {
     bytes.write('data', 36);
     bytes.writeUInt32LE(22050 * 2, 40);
     expect(wavDurationMs(bytes)).toBe(1000);
+  });
+
+  it('drops the filler lines a silent clip often produces', () => {
+    expect(usableTranscript('  谢谢观看  ')).toBe('');
+    expect(usableTranscript('帮我记一下')).toBe('帮我记一下');
   });
 });

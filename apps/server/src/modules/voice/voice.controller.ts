@@ -1,9 +1,9 @@
 import { Body, Controller, Header, Post, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBody, ApiConsumes, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { access } from 'node:fs/promises';
 import { fail } from '../../common/http';
 import { synthesizeSpeech } from '../vision/speech';
+import { transcribeBuffer, whisperPython } from './transcribe';
 import { MAX_AUDIO_BYTES, audioKind, wavDurationMs } from './voice.policy';
 
 @ApiTags('voice')
@@ -36,25 +36,14 @@ export class VoiceController {
     if (!kind) fail(400, 'AUDIO_UNSUPPORTED', '这段录音的格式不能识别。');
     const durationMs = kind === 'audio/wav' ? wavDurationMs(file.buffer) : null;
     if (durationMs != null && durationMs > 120_000) fail(413, 'AUDIO_TOO_LONG', '录音请控制在两分钟以内。');
-    const engine = await localTranscriber();
-    fail(
-      409,
-      'VOICE_UNAVAILABLE',
-      engine
-        ? '本机识别程序还没有接上。请用页面上的语音输入，确认文字后再发送。录音没有保存。'
-        : '本机没有语音识别程序。请用页面上的语音输入，确认文字后再发送。录音没有保存。',
-    );
-  }
-}
-
-async function localTranscriber(): Promise<string | null> {
-  for (const path of ['/opt/homebrew/bin/whisper', '/usr/local/bin/whisper']) {
+    if (!(await whisperPython())) {
+      fail(409, 'VOICE_UNAVAILABLE', '本机没有语音识别程序。请用页面上的语音输入，确认文字后再发送。录音没有保存。');
+    }
+    const extension = kind === 'audio/wav' ? 'wav' : kind === 'audio/mpeg' ? 'mp3' : kind === 'audio/ogg' ? 'ogg' : 'webm';
     try {
-      await access(path);
-      return path;
+      return { text: await transcribeBuffer(file.buffer, extension) };
     } catch {
-      // 继续找下一个位置。
+      fail(503, 'TRANSCRIBE_FAILED', '这句话没有转成文字。录音没有保存。');
     }
   }
-  return null;
 }

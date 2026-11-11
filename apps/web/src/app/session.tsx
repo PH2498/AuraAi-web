@@ -41,8 +41,6 @@ type Session = {
   toggleSensor: (kind: Sensor) => Promise<SensorResult>;
   toggleDictation: () => void;
   startVoiceMeter: () => void;
-  releaseVoiceMeter: () => boolean;
-  markDictationHeard: () => void;
   stopSensing: () => void;
   ollamaReady: boolean;
   ollamaModels: string[];
@@ -117,10 +115,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const dialogResult = useRef<((ok: boolean) => void) | null>(null);
   const levelRef = useRef(0);
   const audioRef = useRef<{ context: AudioContext; frame: number; stream?: MediaStream } | null>(null);
-  const meterYielded = useRef(false);
   const meterStarting = useRef(false);
   const meterContext = useRef<AudioContext | null>(null);
-  const heardAt = useRef(0);
   const toastId = useRef(0);
 
   const toast = useCallback((text: string, options?: { icon?: string; action?: ToastAction }) => {
@@ -191,42 +187,35 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (context && context.state !== 'closed') void context.close();
   }, []);
 
-  const releaseVoiceMeter = useCallback(() => {
-    const had = Boolean(audioRef.current?.stream);
-    if (had) meterYielded.current = true;
-    meterStarting.current = false;
-    stopAudio();
-    closeMeterContext();
-    return had;
-  }, [stopAudio, closeMeterContext]);
-
-  const markDictationHeard = useCallback(() => {
-    heardAt.current = performance.now();
-  }, []);
-
   const startVoiceMeter = useCallback(() => {
-    if (!dictatingRef.current || meterYielded.current || audioRef.current || meterStarting.current) return;
+    if (!dictatingRef.current || audioRef.current || meterStarting.current) return;
     meterStarting.current = true;
     void (async () => {
-      if (!dictatingRef.current || meterYielded.current || audioRef.current) {
+      if (!dictatingRef.current || audioRef.current) {
         meterStarting.current = false;
         return;
       }
+      const deviceId = settingsRef.current.micDevice;
+      const audio: MediaTrackConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: false,
+        channelCount: 1,
+      };
+      if (deviceId) audio.deviceId = { ideal: deviceId };
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
-          video: false,
-        });
+        stream = await navigator.mediaDevices.getUserMedia({ audio, video: false });
       } catch {
         try {
           stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         } catch {
           meterStarting.current = false;
+          closeMeterContext();
           return;
         }
       }
-      if (!dictatingRef.current || meterYielded.current || audioRef.current) {
+      if (!dictatingRef.current || audioRef.current) {
         meterStarting.current = false;
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -241,11 +230,50 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const data = new Float32Array(analyser.fftSize);
       let last = performance.now();
       let envelope = 0;
-      let loudFor = 0;
-      heardAt.current = performance.now();
+      let speakingFor = 0;
+      let quietFor = 0;
+      let voiced = false;
+      let recorder: MediaRecorder | null = null;
+      const parts: Blob[] = [];
+      const openRecorder = () => {
+        if (typeof MediaRecorder === 'undefined' || recorder?.state === 'recording') return;
+        parts.length = 0;
+        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+        recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        recorder.addEventListener('dataavailable', (event) => {
+          if (event.data.size) parts.push(event.data);
+        });
+        recorder.start();
+      };
+      const finishUtterance = (): boolean => {
+        const current = recorder;
+        recorder = null;
+        if (!current || current.state !== 'recording') return false;
+        const clips = parts.splice(0);
+        current.addEventListener(
+          'dataavailable',
+          (event) => {
+            if (event.data.size) clips.push(event.data);
+          },
+          { once: true },
+        );
+        current.addEventListener(
+          'stop',
+          () => {
+            const blob = new Blob(clips, { type: current.mimeType || 'audio/webm' });
+            if (blob.size > 800) window.dispatchEvent(new CustomEvent('aura-utterance', { detail: blob }));
+            if (dictatingRef.current) openRecorder();
+            else stopAudio();
+          },
+          { once: true },
+        );
+        current.stop();
+        return true;
+      };
+      openRecorder();
       const pump = (now: number) => {
-        if (!dictatingRef.current || meterYielded.current) {
-          stopAudio();
+        if (!dictatingRef.current) {
+          if (!(voiced && finishUtterance())) stopAudio();
           return;
         }
         analyser.getFloatTimeDomainData(data);
@@ -254,17 +282,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const rms = Math.sqrt(sum / data.length);
         const dt = Math.min(0.05, (now - last) / 1000);
         last = now;
-        const target = Math.min(1, Math.max(0, rms - 0.01) * 7);
-        const tau = target > envelope ? 0.018 : 0.05;
+        const target = Math.min(1, Math.max(0, (rms - 0.004) / 0.05));
+        const tau = target > envelope ? 0.02 : 0.14;
         envelope += (target - envelope) * (1 - Math.exp(-dt / tau));
         levelRef.current = envelope;
-        if (rms > 0.04) loudFor += dt;
-        else loudFor = 0;
-        if (loudFor > 2.2 && now - heardAt.current > 2200) {
-          meterYielded.current = true;
-          stopAudio();
-          window.dispatchEvent(new Event('aura-meter-yield'));
-          return;
+        if (rms > 0.015) {
+          speakingFor += dt;
+          quietFor = 0;
+          if (speakingFor > 0.28) voiced = true;
+        } else if (voiced) {
+          quietFor += dt;
+          if (quietFor > 0.7) {
+            voiced = false;
+            speakingFor = 0;
+            quietFor = 0;
+            finishUtterance();
+          }
+        } else {
+          speakingFor = 0;
         }
         const frame = requestAnimationFrame(pump);
         if (audioRef.current) audioRef.current.frame = frame;
@@ -273,7 +308,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       meterStarting.current = false;
       pump(performance.now());
     })();
-  }, [stopAudio]);
+  }, [stopAudio, closeMeterContext]);
 
   const stopKind = useCallback(
     (kind: Sensor) => {
@@ -298,7 +333,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setStreams(EMPTY_STREAMS);
     dictatingRef.current = false;
     setDictating(false);
-    meterYielded.current = false;
     meterStarting.current = false;
     setAura('idle');
   }, [stopAudio, closeMeterContext]);
@@ -570,21 +604,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       });
       stopAudio();
       closeMeterContext();
-      meterYielded.current = false;
       meterStarting.current = false;
-      heardAt.current = performance.now();
       const context = new AudioContext({ latencyHint: 'interactive' });
       void context.resume();
       meterContext.current = context;
       setAura('listening');
+      startVoiceMeter();
     } else {
       stopAudio();
       closeMeterContext();
-      meterYielded.current = false;
       meterStarting.current = false;
       setAura((current) => (current === 'listening' ? 'idle' : current));
     }
-  }, [stopAudio, closeMeterContext]);
+  }, [stopAudio, closeMeterContext, startVoiceMeter]);
 
   const sensing = {
     mic: Boolean(streams.mic),
@@ -605,8 +637,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       toggleSensor,
       toggleDictation,
       startVoiceMeter,
-      releaseVoiceMeter,
-      markDictationHeard,
       stopSensing,
       ollamaReady,
       ollamaModels,
@@ -647,8 +677,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       toggleSensor,
       toggleDictation,
       startVoiceMeter,
-      releaseVoiceMeter,
-      markDictationHeard,
       stopSensing,
       ollamaReady,
       ollamaModels,

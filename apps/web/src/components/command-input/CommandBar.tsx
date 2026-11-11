@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSession } from '../../app/session';
 import { cloudItemStatus, cloudRef, describeChoice, localRef, parseModelRef } from '../../state/models';
-import { startBrowserRecognition } from '../../voice/recognition';
+import { appendSpeech, startBrowserRecognition } from '../../voice/recognition';
+import { transcribeClip } from '../../voice/transcribe';
 import { Icon } from '../icon';
 
 export function CommandBar({
@@ -20,20 +21,18 @@ export function CommandBar({
   busy?: boolean;
   placeholder?: string;
 }) {
-  const { settings, updateSettings, ollamaReady, ollamaModels, endpoints, cloudProbes, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, releaseVoiceMeter, markDictationHeard, toast } = useSession();
+  const { settings, updateSettings, ollamaReady, ollamaModels, endpoints, cloudProbes, sensing, streams, toggleSensor, dictating, toggleDictation, startVoiceMeter, levelRef, toast } = useSession();
   const [open, setOpen] = useState(false);
   const [finder, setFinder] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const stopDictation = useRef(toggleDictation);
   const writeDraft = useRef(onChange);
   const beginMeter = useRef(startVoiceMeter);
-  const dropMeter = useRef(releaseVoiceMeter);
-  const heard = useRef(markDictationHeard);
+  const draftNow = useRef(value);
   stopDictation.current = toggleDictation;
   writeDraft.current = onChange;
   beginMeter.current = startVoiceMeter;
-  dropMeter.current = releaseVoiceMeter;
-  heard.current = markDictationHeard;
+  draftNow.current = value;
   const box = useRef<HTMLDivElement>(null);
   const modelBtn = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -44,44 +43,77 @@ export function CommandBar({
 
   useEffect(() => {
     if (!dictating) return;
-    let handle: { stop: () => void; restart: () => void } | null = null;
+    let handle: { stop: () => void } | null = null;
+    let base = draftNow.current;
+    let segment = '';
     let reported = false;
-    const fail = (text: string) => {
+    const note = (text: string, stop: boolean) => {
       if (reported) return;
       reported = true;
       toast(text);
-      stopDictation.current();
+      if (stop) stopDictation.current();
     };
-    const yieldMeter = () => {
-      dropMeter.current();
-      handle?.restart();
+    let browserAt = 0;
+    let chain = Promise.resolve();
+    const onUtterance = (event: Event) => {
+      const blob = (event as CustomEvent<Blob>).detail;
+      if (!(blob instanceof Blob)) return;
+      chain = chain.then(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, browserAt ? 900 : 0));
+        if (browserAt && Date.now() - browserAt < 1600) return;
+        try {
+          const text = await transcribeClip(blob);
+          if (!text || (browserAt && Date.now() - browserAt < 1600)) return;
+          base = appendSpeech(appendSpeech(base, segment), text);
+          segment = '';
+          writeDraft.current(base);
+        } catch (error) {
+          note(error instanceof Error ? error.message : '这句话没有转成文字。', false);
+        }
+      });
     };
-    const timer = window.setTimeout(() => {
-      handle = startBrowserRecognition({
+    window.addEventListener('aura-utterance', onUtterance);
+    beginMeter.current();
+    handle = startBrowserRecognition({
         onAudioStart: () => beginMeter.current(),
-        onText: (text) => {
-          writeDraft.current(text);
-          heard.current();
+        onText: (finalText, interimText) => {
+          browserAt = Date.now();
+          segment = finalText;
+          writeDraft.current(appendSpeech(base, `${finalText}${interimText}`));
+        },
+        onSegment: () => {
+          base = appendSpeech(base, segment);
+          segment = '';
         },
         onError: (code) => {
-          if (code === 'not-allowed' || code === 'service-not-allowed') fail('没有获得麦克风。允许之后再点一次语音。');
-          else if (code === 'network') fail('浏览器的语音识别没有连上，这句话没有转成文字。');
-          else if (code === 'audio-capture') {
-            if (dropMeter.current()) return true;
-            fail('麦克风正被占用，这次没有听清。');
-          } else if (code !== 'aborted' && code !== 'no-speech') fail('这次没有听清。可以再说一次。');
+          if (code === 'not-allowed' || code === 'service-not-allowed') note('没有获得麦克风。允许之后再点一次语音。', true);
+          else if (code !== 'aborted' && code !== 'no-speech' && code !== 'network' && code !== 'audio-capture') note('这次没有听清。可以再说一次。', false);
         },
         onEnd: () => undefined,
       });
-      if (!handle) fail('这台浏览器不能把语音转成文字。可以改用键盘输入。');
-    }, 120);
-    window.addEventListener('aura-meter-yield', yieldMeter);
+    if (!handle) note('这台浏览器不能把语音转成文字。可以改用键盘输入。', true);
     return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener('aura-meter-yield', yieldMeter);
+      window.removeEventListener('aura-utterance', onUtterance);
       handle?.stop();
     };
   }, [dictating, toast]);
+
+  useEffect(() => {
+    if (!dictating) return;
+    const bars = box.current?.querySelectorAll<HTMLElement>('.bars i');
+    if (!bars?.length) return;
+    let frame = 0;
+    const tick = () => {
+      const level = levelRef.current;
+      bars.forEach((bar, index) => {
+        const shape = 0.45 + 0.55 * Math.abs(Math.sin(performance.now() / 140 + index * 0.9));
+        bar.style.height = `${3 + level * 13 * shape}px`;
+      });
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [dictating, levelRef]);
 
   useEffect(() => {
     if (!open && !finder) return;
